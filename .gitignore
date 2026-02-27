@@ -1,0 +1,11 @@
+certs/
+.env
+*.log
+.claude/
+.cursor/
+.devcontainer/
+.worktrees/
+
+# Go
+claude-hybrid/claude-hybrid
+SPEC.md
