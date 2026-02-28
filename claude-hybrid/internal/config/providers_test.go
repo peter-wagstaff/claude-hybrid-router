@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
 
@@ -65,6 +66,41 @@ providers:
 	_, err = r.Resolve("nonexistent")
 	if err == nil {
 		t.Error("expected error for unknown label")
+	}
+
+	// Auto-detect transform from provider name
+	if !reflect.DeepEqual(m.Transform, []string{"schema:generic"}) { // "together" doesn't match any known preset
+		t.Errorf("expected [schema:generic] transform for 'together', got %v", m.Transform)
+	}
+	ollamaModel, _ := r.Resolve("fast_coder")
+	if !reflect.DeepEqual(ollamaModel.Transform, []string{"schema:ollama"}) {
+		t.Errorf("expected [schema:ollama] transform, got %v", ollamaModel.Transform)
+	}
+}
+
+func TestExplicitTransform(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: my-google-provider
+    endpoint: https://generativelanguage.googleapis.com/v1beta/openai
+    transform: ["gemini"]
+    models:
+      flash: gemini-2.0-flash
+`), 0644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+	m, _ := r.Resolve("flash")
+	if !reflect.DeepEqual(m.Transform, []string{"gemini"}) {
+		t.Errorf("expected [gemini] transform, got %v", m.Transform)
 	}
 }
 
@@ -134,5 +170,140 @@ providers:
 	_, err := NewModelResolver(cfg)
 	if err == nil {
 		t.Error("expected error for missing endpoint")
+	}
+}
+
+func TestTransformArray(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: local
+    endpoint: http://localhost:11434/v1
+    transform: ["reasoning", "enhancetool"]
+    models:
+      smart: qwen3:32b
+`), 0644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+	m, _ := r.Resolve("smart")
+	want := []string{"reasoning", "enhancetool"}
+	if !reflect.DeepEqual(m.Transform, want) {
+		t.Errorf("expected %v, got %v", want, m.Transform)
+	}
+}
+
+func TestTransformPerModel(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: local
+    endpoint: http://localhost:11434/v1
+    transform: ["reasoning"]
+    models:
+      default_model: qwen3:32b
+      tool_model:
+        model: qwen3:32b
+        transform: ["tooluse", "enhancetool"]
+`), 0644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+
+	// default_model should inherit provider-level transform
+	dm, _ := r.Resolve("default_model")
+	if !reflect.DeepEqual(dm.Transform, []string{"reasoning"}) {
+		t.Errorf("expected provider-level [reasoning], got %v", dm.Transform)
+	}
+
+	// tool_model should use per-model override
+	tm, _ := r.Resolve("tool_model")
+	want := []string{"tooluse", "enhancetool"}
+	if !reflect.DeepEqual(tm.Transform, want) {
+		t.Errorf("expected per-model %v, got %v", want, tm.Transform)
+	}
+}
+
+func TestTransformAutoDetect(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: ollama
+    endpoint: http://localhost:11434/v1
+    models:
+      local: qwen3:32b
+  - name: some-provider
+    endpoint: http://localhost:8080/v1
+    models:
+      remote: some-model
+`), 0644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+
+	m, _ := r.Resolve("local")
+	if !reflect.DeepEqual(m.Transform, []string{"schema:ollama"}) {
+		t.Errorf("expected [schema:ollama], got %v", m.Transform)
+	}
+
+	m, _ = r.Resolve("remote")
+	if !reflect.DeepEqual(m.Transform, []string{"schema:generic"}) {
+		t.Errorf("expected [schema:generic], got %v", m.Transform)
+	}
+}
+
+func TestModelConfigMaxTokens(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: local
+    endpoint: http://localhost:11434/v1
+    max_tokens: 4096
+    models:
+      default_cap: qwen3:32b
+      custom_cap:
+        model: qwen3:32b
+        max_tokens: 8192
+`), 0644)
+
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+
+	dm, _ := r.Resolve("default_cap")
+	if dm.MaxTokens != 4096 {
+		t.Errorf("expected provider-level 4096, got %d", dm.MaxTokens)
+	}
+
+	cm, _ := r.Resolve("custom_cap")
+	if cm.MaxTokens != 8192 {
+		t.Errorf("expected per-model 8192, got %d", cm.MaxTokens)
 	}
 }

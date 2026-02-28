@@ -53,7 +53,10 @@ type StreamTranslator struct {
 	finishReason string
 	usage        *OUsage
 	// Track tool calls by index to handle multi-chunk tool call streaming
-	toolCalls    map[int]*activeToolCall
+	toolCalls map[int]*activeToolCall
+	// Transform chain for stream chunk processing
+	chain *TransformChain
+	ctx   *TransformContext
 }
 
 type activeToolCall struct {
@@ -68,6 +71,12 @@ func NewStreamTranslator(modelLabel string) *StreamTranslator {
 		msgID:      "msg_stream",
 		toolCalls:  make(map[int]*activeToolCall),
 	}
+}
+
+// SetTransformChain sets the transform chain and context for stream chunk processing.
+func (st *StreamTranslator) SetTransformChain(chain *TransformChain, ctx *TransformContext) {
+	st.chain = chain
+	st.ctx = ctx
 }
 
 // TranslateStream reads an OpenAI SSE stream from r and writes Anthropic SSE events to w.
@@ -93,58 +102,24 @@ func (st *StreamTranslator) TranslateStream(r io.Reader, w io.Writer) error {
 			continue // Skip unparseable chunks
 		}
 
-		// Capture message ID from first chunk
-		if !st.started && chunk.ID != "" {
-			st.msgID = "msg_" + chunk.ID
-		}
-
-		// Capture usage if present (from stream_options)
-		if chunk.Usage != nil {
-			st.usage = chunk.Usage
-		}
-
-		if len(chunk.Choices) == 0 {
+		// Run stream transforms if chain is set
+		if st.chain != nil && st.ctx != nil {
+			transformedChunks, err := st.chain.RunStreamChunk([]byte(data), st.ctx)
+			if err != nil {
+				continue
+			}
+			// Process each transformed chunk through the state machine
+			for _, tc := range transformedChunks {
+				var transformedChunk OStreamChunk
+				if json.Unmarshal(tc, &transformedChunk) != nil {
+					continue
+				}
+				st.processChunk(w, transformedChunk)
+			}
 			continue
 		}
-
-		choice := chunk.Choices[0]
-
-		// Emit message_start on first chunk
-		if !st.started {
-			st.started = true
-			st.emitMessageStart(w)
-		}
-
-		// Handle finish_reason
-		if choice.FinishReason != nil {
-			st.finishReason = *choice.FinishReason
-		}
-
-		// Handle text content
-		if choice.Delta.Content != nil && *choice.Delta.Content != "" {
-			if !st.inTextBlock {
-				st.closeCurrentBlock(w)
-				st.emitContentBlockStart(w, "text", "", "")
-				st.inTextBlock = true
-			}
-			st.emitTextDelta(w, *choice.Delta.Content)
-		}
-
-		// Handle tool calls
-		for _, tc := range choice.Delta.ToolCalls {
-			// New tool call (has id and name)
-			if tc.ID != "" {
-				st.toolCalls[tc.Index] = &activeToolCall{id: tc.ID, name: tc.Function.Name}
-				st.closeCurrentBlock(w)
-				st.emitContentBlockStart(w, "tool_use", sanitizeToolID(tc.ID), tc.Function.Name)
-				st.inToolBlock = true
-			}
-
-			// Argument fragment
-			if tc.Function.Arguments != "" {
-				st.emitInputJSONDelta(w, tc.Function.Arguments)
-			}
-		}
+		// Original processing (when no chain is set)
+		st.processChunk(w, chunk)
 	}
 
 	// Close any open block
@@ -157,6 +132,61 @@ func (st *StreamTranslator) TranslateStream(r io.Reader, w io.Writer) error {
 	st.emitEvent(w, "message_stop", map[string]string{"type": "message_stop"})
 
 	return scanner.Err()
+}
+
+func (st *StreamTranslator) processChunk(w io.Writer, chunk OStreamChunk) {
+	// Capture message ID from first chunk
+	if !st.started && chunk.ID != "" {
+		st.msgID = "msg_" + chunk.ID
+	}
+
+	// Capture usage if present (from stream_options)
+	if chunk.Usage != nil {
+		st.usage = chunk.Usage
+	}
+
+	if len(chunk.Choices) == 0 {
+		return
+	}
+
+	choice := chunk.Choices[0]
+
+	// Emit message_start on first chunk
+	if !st.started {
+		st.started = true
+		st.emitMessageStart(w)
+	}
+
+	// Handle finish_reason
+	if choice.FinishReason != nil {
+		st.finishReason = *choice.FinishReason
+	}
+
+	// Handle text content
+	if choice.Delta.Content != nil && *choice.Delta.Content != "" {
+		if !st.inTextBlock {
+			st.closeCurrentBlock(w)
+			st.emitContentBlockStart(w, "text", "", "")
+			st.inTextBlock = true
+		}
+		st.emitTextDelta(w, *choice.Delta.Content)
+	}
+
+	// Handle tool calls
+	for _, tc := range choice.Delta.ToolCalls {
+		// New tool call (has id and name)
+		if tc.ID != "" {
+			st.toolCalls[tc.Index] = &activeToolCall{id: tc.ID, name: tc.Function.Name}
+			st.closeCurrentBlock(w)
+			st.emitContentBlockStart(w, "tool_use", sanitizeToolID(tc.ID), tc.Function.Name)
+			st.inToolBlock = true
+		}
+
+		// Argument fragment
+		if tc.Function.Arguments != "" {
+			st.emitInputJSONDelta(w, tc.Function.Arguments)
+		}
+	}
 }
 
 func (st *StreamTranslator) closeCurrentBlock(w io.Writer) {

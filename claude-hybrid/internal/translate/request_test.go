@@ -2,6 +2,7 @@ package translate
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -271,5 +272,113 @@ func TestRequestMultipleToolResults(t *testing.T) {
 	}
 	if req.Messages[1].Role != "tool" || req.Messages[1].ToolCallID != "t2" {
 		t.Errorf("unexpected second tool message: %+v", req.Messages[1])
+	}
+}
+
+func TestRequestToolSchemaStripping(t *testing.T) {
+	// Schema stripping is now handled by the transform chain, not RequestToOpenAI.
+	// This test verifies that RequestToOpenAI + schema:generic chain strips schemas correctly.
+	input := `{
+		"model": "x",
+		"messages": [{"role": "user", "content": "hi"}],
+		"tools": [{
+			"name": "Read",
+			"description": "Read a file",
+			"input_schema": {
+				"type": "object",
+				"additionalProperties": false,
+				"strict": true,
+				"$schema": "http://json-schema.org/draft-07/schema#",
+				"properties": {
+					"file_path": {
+						"type": "string",
+						"additionalProperties": false
+					},
+					"options": {
+						"type": "object",
+						"additionalProperties": false,
+						"properties": {
+							"encoding": {"type": "string"}
+						}
+					}
+				},
+				"required": ["file_path"]
+			}
+		}]
+	}`
+
+	out, err := RequestToOpenAI([]byte(input), "model", 0)
+	if err != nil {
+		t.Fatalf("RequestToOpenAI: %v", err)
+	}
+
+	// Run through schema:generic chain
+	chain, _ := BuildChain([]string{"schema:generic"})
+	ctx := NewTransformContext("model", "provider")
+	var oaiReq map[string]interface{}
+	json.Unmarshal(out, &oaiReq)
+	chain.RunRequest(oaiReq, ctx)
+	out, _ = json.Marshal(oaiReq)
+
+	var req ORequest
+	json.Unmarshal(out, &req)
+
+	params := string(req.Tools[0].Function.Parameters)
+
+	// Should be stripped at all levels
+	if strings.Contains(params, "additionalProperties") {
+		t.Error("additionalProperties not stripped from schema")
+	}
+	if strings.Contains(params, "strict") {
+		t.Error("strict not stripped from schema")
+	}
+	if strings.Contains(params, "$schema") {
+		t.Error("$schema not stripped from schema")
+	}
+
+	// Should preserve required fields
+	if !strings.Contains(params, "required") {
+		t.Error("required field incorrectly stripped")
+	}
+	if !strings.Contains(params, "file_path") {
+		t.Error("properties incorrectly stripped")
+	}
+}
+
+func TestRequestToolSchemaArrayItems(t *testing.T) {
+	input := `{
+		"model": "x",
+		"messages": [{"role": "user", "content": "hi"}],
+		"tools": [{
+			"name": "test",
+			"description": "test",
+			"input_schema": {
+				"type": "object",
+				"properties": {
+					"items": {
+						"type": "array",
+						"items": {
+							"type": "object",
+							"additionalProperties": false,
+							"properties": {"name": {"type": "string"}}
+						}
+					}
+				}
+			}
+		}]
+	}`
+
+	out, _ := RequestToOpenAI([]byte(input), "model", 0)
+
+	// Run through schema:generic chain
+	chain, _ := BuildChain([]string{"schema:generic"})
+	ctx := NewTransformContext("model", "provider")
+	var oaiReq map[string]interface{}
+	json.Unmarshal(out, &oaiReq)
+	chain.RunRequest(oaiReq, ctx)
+	out, _ = json.Marshal(oaiReq)
+
+	if strings.Contains(string(out), "additionalProperties") {
+		t.Error("additionalProperties not stripped from nested array items")
 	}
 }

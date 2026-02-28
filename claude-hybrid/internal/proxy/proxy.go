@@ -313,6 +313,14 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		return
 	}
 
+	// Build transform chain
+	chain, err := translate.BuildChain(resolved.Transform)
+	if err != nil {
+		log.Printf("transform chain build failed for %v: %v — falling back to no transforms", resolved.Transform, err)
+		chain = translate.NewTransformChain()
+	}
+	ctx := translate.NewTransformContext(resolved.Model, resolved.Provider)
+
 	// Translate request body
 	oaiBody, err := translate.RequestToOpenAI(body, resolved.Model, resolved.MaxTokens)
 	if err != nil {
@@ -320,6 +328,16 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		errBody := translate.FormatError("api_error", fmt.Sprintf("Request translation failed: %v", err))
 		sendAnthropicError(w, 500, errBody)
 		return
+	}
+
+	// Run request transforms
+	var oaiReq map[string]interface{}
+	if err := json.Unmarshal(oaiBody, &oaiReq); err == nil {
+		if err := chain.RunRequest(oaiReq, ctx); err != nil {
+			log.Printf("request transform failed: %v", err)
+		} else {
+			oaiBody, _ = json.Marshal(oaiReq)
+		}
 	}
 
 	// Determine if streaming
@@ -368,6 +386,7 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		// Stream: translate OpenAI SSE → Anthropic SSE
 		var sseBuf bytes.Buffer
 		st := translate.NewStreamTranslator(modelLabel)
+		st.SetTransformChain(chain, ctx)
 		if err := st.TranslateStream(resp.Body, &sseBuf); err != nil {
 			log.Printf("stream translation error: %v", err)
 			return
@@ -384,6 +403,7 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 			log.Printf("local response read error: %v", err)
 			return
 		}
+		respBody, _ = chain.RunResponse(respBody, ctx)
 		aBody, err := translate.ResponseToAnthropic(respBody, modelLabel)
 		if err != nil {
 			log.Printf("response translation failed: %v", err)

@@ -96,6 +96,7 @@ type OFunction struct {
 }
 
 // RequestToOpenAI translates an Anthropic Messages request body to OpenAI Chat Completions format.
+// Schema cleaning is handled separately by the transform chain.
 func RequestToOpenAI(body []byte, backendModel string, maxTokensCap int) ([]byte, error) {
 	var req AnthropicRequest
 	if err := json.Unmarshal(body, &req); err != nil {

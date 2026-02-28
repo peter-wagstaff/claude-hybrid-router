@@ -29,9 +29,21 @@ claude-hybrid/
 │   │   ├── echo.go                  # Mock HTTPS echo server
 │   │   └── openai.go               # Mock OpenAI chat completions server
 │   └── translate/
-│       ├── request.go               # Anthropic Messages → OpenAI Chat Completions request
-│       ├── response.go              # OpenAI Chat Completions → Anthropic Messages response
-│       └── stream.go                # OpenAI SSE → Anthropic SSE streaming state machine
+│       ├── transformer.go           # Transformer interface, TransformChain, TransformContext
+│       ├── transform_registry.go    # Transform name → constructor registry, BuildChain
+│       ├── transform.go             # Schema cleaning (SchemaTransformer, fieldStripper, geminiTransformer)
+│       ├── transform_reasoning.go   # reasoning_content → thinking blocks
+│       ├── transform_enhancetool.go # Repair malformed tool call JSON
+│       ├── transform_deepseek.go    # max_tokens cap
+│       ├── transform_thinktag.go    # <think> tag extraction FSM
+│       ├── transform_openrouter.go  # OpenRouter quirks (tool IDs, cache_control, reasoning field)
+│       ├── transform_groq.go        # Groq quirks (cache_control, $schema, tool IDs)
+│       ├── transform_tooluse.go     # ExitTool injection/interception
+│       ├── transform_forcereasoning.go # Inject reasoning prompt, extract tags
+│       ├── jsonfix.go               # Relaxed JSON parser for tool argument repair
+│       ├── request.go               # Anthropic → OpenAI request translation
+│       ├── response.go              # OpenAI → Anthropic response translation
+│       └── stream.go                # OpenAI SSE → Anthropic SSE streaming
 ```
 
 ## Commands
@@ -66,7 +78,13 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
                               ├─ TLS handshake with client (MITM cert from CertCache)
                               ├─ http.ReadRequest() reads plaintext HTTP
                               ├─ Parse JSON body, check system field for routing marker
-                              ├─ If marker found + config → translate to OpenAI, forward to provider, translate response back
+                              ├─ If marker found + config:
+                              │   ├─ Translate Anthropic → OpenAI (RequestToOpenAI)
+                              │   ├─ Build transform chain from provider config
+                              │   ├─ Run request transforms (schema cleaning, tool injection, etc.)
+                              │   ├─ Forward to local provider
+                              │   ├─ Run response/stream transforms (reasoning, tool repair, etc.)
+                              │   └─ Translate OpenAI → Anthropic (ResponseToAnthropic / StreamTranslator)
                               ├─ If marker found, no config → return stub response
                               └─ If no marker → HTTP/2 to upstream via net/http, relay as HTTP/1.1
 ```
@@ -81,9 +99,57 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 | `internal/config/config.go` | Configuration: timeouts, limits (all overridable via env vars) |
 | `internal/config/providers.go` | YAML config parsing (`~/.claude-hybrid/config.yaml`), model label resolution |
 | `internal/mitm/mitm.go` | Dynamic per-domain cert generation + LRU tls.Certificate cache |
+| `internal/translate/transformer.go` | Transformer interface, TransformChain, TransformContext |
+| `internal/translate/transform_registry.go` | Transform name → constructor registry, BuildChain |
+| `internal/translate/transform.go` | Schema cleaning transforms (generic, openai, gemini, ollama) |
+| `internal/translate/transform_reasoning.go` | Converts reasoning_content → Anthropic thinking blocks |
+| `internal/translate/transform_enhancetool.go` | Repairs malformed tool call JSON arguments |
+| `internal/translate/transform_deepseek.go` | Caps max_tokens to 8192 for DeepSeek |
+| `internal/translate/transform_thinktag.go` | Extracts `<think>` tags from content into thinking blocks |
+| `internal/translate/transform_openrouter.go` | Fixes OpenRouter quirks (tool IDs, cache_control, reasoning) |
+| `internal/translate/transform_groq.go` | Fixes Groq quirks (cache_control, $schema, tool IDs) |
+| `internal/translate/transform_tooluse.go` | ExitTool injection for models that avoid tool use |
+| `internal/translate/transform_forcereasoning.go` | Injects reasoning prompt and extracts reasoning tags |
+| `internal/translate/jsonfix.go` | Relaxed JSON parser for tool argument repair |
 | `internal/translate/request.go` | Anthropic Messages API → OpenAI Chat Completions API request translation |
 | `internal/translate/response.go` | OpenAI → Anthropic response translation (text, tool use, errors) |
 | `internal/translate/stream.go` | OpenAI SSE → Anthropic SSE streaming state machine |
+
+## Provider Config with Transforms
+
+Providers can specify a `transform` array at the provider level (applied to all models) and/or per-model:
+
+```yaml
+providers:
+  - name: deepseek
+    endpoint: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+    transform: ["deepseek", "reasoning", "enhancetool", "schema:generic"]
+    models:
+      reasoner: deepseek-reasoner
+      chat:
+        model: deepseek-chat
+        transform: ["tooluse", "enhancetool", "schema:generic"]
+```
+
+Per-model `transform` overrides the provider-level `transform` (no merging).
+
+## Available Transforms
+
+| Transform | What it does |
+|-----------|-------------|
+| `schema:generic` | Strips additionalProperties, $schema, strict from tool schemas |
+| `schema:openai` | Strips only strict |
+| `schema:gemini` | Strips Gemini-incompatible schema fields and format values |
+| `schema:ollama` | Same as generic |
+| `reasoning` | Converts reasoning_content → Anthropic thinking blocks |
+| `enhancetool` | Repairs malformed tool call JSON arguments |
+| `deepseek` | Caps max_tokens to 8192 |
+| `extrathinktag` | Extracts `<think>` tags from content into thinking blocks |
+| `openrouter` | Fixes OpenRouter quirks (tool IDs, cache_control, reasoning field) |
+| `groq` | Fixes Groq quirks (cache_control, $schema, tool IDs) |
+| `tooluse` | Injects ExitTool for models that avoid tool use |
+| `forcereasoning` | Injects reasoning prompt and extracts reasoning tags |
 
 ## Testing
 
