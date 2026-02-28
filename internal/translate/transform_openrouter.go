@@ -5,7 +5,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"strconv"
-	"strings"
 )
 
 // openRouterTransform handles OpenRouter quirks: numeric tool IDs,
@@ -21,33 +20,9 @@ func newOpenRouterTransform() *openRouterTransform {
 
 func (o *openRouterTransform) Name() string { return "openrouter" }
 
-func (o *openRouterTransform) TransformRequest(req map[string]interface{}, ctx *TransformContext) error {
-	if strings.Contains(strings.ToLower(ctx.ModelName), "claude") {
-		return nil
-	}
-	// Strip cache_control from messages for non-Claude models.
-	msgs, ok := req["messages"].([]interface{})
-	if !ok {
-		return nil
-	}
-	for _, m := range msgs {
-		msg, ok := m.(map[string]interface{})
-		if !ok {
-			continue
-		}
-		delete(msg, "cache_control")
-		parts, ok := msg["content"].([]interface{})
-		if !ok {
-			continue
-		}
-		for _, p := range parts {
-			part, ok := p.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			delete(part, "cache_control")
-		}
-	}
+// TransformRequest is a no-op. Cache_control stripping for non-Claude models
+// is handled by the cleancache transform in the chain.
+func (o *openRouterTransform) TransformRequest(_ map[string]interface{}, _ *TransformContext) error {
 	return nil
 }
 

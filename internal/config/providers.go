@@ -11,9 +11,10 @@ import (
 
 // ModelConfig supports both simple string ("qwen3:32b") and expanded form with per-model overrides.
 type ModelConfig struct {
-	Model     string   `yaml:"model"`
-	MaxTokens int      `yaml:"max_tokens,omitempty"`
-	Transform []string `yaml:"transform,omitempty"` // per-model override (replaces provider-level)
+	Model     string                 `yaml:"model"`
+	MaxTokens int                    `yaml:"max_tokens,omitempty"`
+	Transform []string               `yaml:"transform,omitempty"`  // per-model override (replaces provider-level)
+	Params    map[string]interface{} `yaml:"params,omitempty"`     // custom params injected into request body
 }
 
 // UnmarshalYAML allows ModelConfig to be a plain string or a map.
@@ -33,6 +34,7 @@ type ProviderConfig struct {
 	APIKey    string                  `yaml:"api_key"`
 	MaxTokens int                     `yaml:"max_tokens,omitempty"`  // cap max_tokens for this provider
 	Transform []string                `yaml:"transform,omitempty"`   // transform chain (auto-detected from name if empty)
+	Params    map[string]interface{}  `yaml:"params,omitempty"`      // custom params injected into request body
 	Models    map[string]ModelConfig  `yaml:"models"`                // label → backend model name or config
 }
 
@@ -43,13 +45,14 @@ type ProvidersConfig struct {
 
 // ResolvedModel holds the result of resolving a model label.
 type ResolvedModel struct {
-	Endpoint  string // e.g. "http://localhost:11434/v1"
-	Model     string // backend model name, e.g. "qwen3:32b"
-	APIKey    string // resolved API key (empty if none)
-	Label     string // original label, e.g. "fast_coder"
-	Provider  string // provider name, e.g. "ollama"
-	MaxTokens int      // cap max_tokens (0 = no cap)
-	Transform []string // transform chain
+	Endpoint  string                 // e.g. "http://localhost:11434/v1"
+	Model     string                 // backend model name, e.g. "qwen3:32b"
+	APIKey    string                 // resolved API key (empty if none)
+	Label     string                 // original label, e.g. "fast_coder"
+	Provider  string                 // provider name, e.g. "ollama"
+	MaxTokens int                    // cap max_tokens (0 = no cap)
+	Transform []string               // transform chain
+	Params    map[string]interface{} // custom params injected into request body
 }
 
 // ModelResolver resolves model labels to provider details.
@@ -108,6 +111,11 @@ func NewModelResolver(cfg *ProvidersConfig) (*ModelResolver, error) {
 			if mc.MaxTokens > 0 {
 				maxTokens = mc.MaxTokens
 			}
+			// Per-model params override provider-level
+			params := p.Params
+			if len(mc.Params) > 0 {
+				params = mc.Params
+			}
 			models[label] = ResolvedModel{
 				Endpoint:  endpoint,
 				Model:     mc.Model,
@@ -116,6 +124,7 @@ func NewModelResolver(cfg *ProvidersConfig) (*ModelResolver, error) {
 				Provider:  p.Name,
 				MaxTokens: maxTokens,
 				Transform: transform,
+				Params:    params,
 			}
 		}
 	}

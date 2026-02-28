@@ -10,6 +10,10 @@ import (
 
 const reasoningPrompt = "\n\nAlways think step by step before answering. Output your thinking process inside <reasoning_content>...</reasoning_content> tags, then provide your final answer after the closing tag."
 
+// maxInterleavedThinking limits how many prior assistant messages get thinking re-injected
+// to avoid context window bloat.
+const maxInterleavedThinking = 10
+
 var reasoningContentRe = regexp.MustCompile(`(?s)<reasoning_content>(.*?)</reasoning_content>`)
 
 // forceReasoningTransform injects a reasoning prompt into the last user message
@@ -26,32 +30,65 @@ func newForceReasoningTransform() *forceReasoningTransform {
 
 func (t *forceReasoningTransform) Name() string { return "forcereasoning" }
 
-// TransformRequest appends the reasoning prompt to the last user message.
+// TransformRequest re-injects prior thinking into assistant messages as
+// <reasoning_content> tags and appends the reasoning prompt to the last
+// user message (or adds a new user message if the last message is a tool result).
 func (t *forceReasoningTransform) TransformRequest(req map[string]interface{}, _ *TransformContext) error {
 	msgs, ok := req["messages"].([]interface{})
 	if !ok || len(msgs) == 0 {
 		return nil
 	}
 
-	// Find last user message (iterate backwards)
-	for i := len(msgs) - 1; i >= 0; i-- {
+	// Re-inject prior thinking into assistant messages (most recent first, capped).
+	injected := 0
+	for i := len(msgs) - 1; i >= 0 && injected < maxInterleavedThinking; i-- {
 		msg, ok := msgs[i].(map[string]interface{})
-		if !ok {
+		if !ok || msg["role"] != "assistant" {
 			continue
 		}
-		if msg["role"] != "user" {
+		thinking, ok := msg["thinking"].(string)
+		if !ok || thinking == "" {
 			continue
 		}
+		content, _ := msg["content"].(string)
+		msg["content"] = "<reasoning_content>" + thinking + "</reasoning_content>\n" + content
+		delete(msg, "thinking")
+		injected++
+	}
 
-		// Append reasoning prompt to content
-		switch content := msg["content"].(type) {
-		case string:
-			msg["content"] = content + reasoningPrompt
-		}
+	// Find last message.
+	last, ok := msgs[len(msgs)-1].(map[string]interface{})
+	if !ok {
 		return nil
 	}
 
+	switch last["role"] {
+	case "user":
+		appendReasoningPrompt(last)
+	case "tool":
+		// Append a new user message with the reasoning prompt.
+		msgs = append(msgs, map[string]interface{}{
+			"role":    "user",
+			"content": reasoningPrompt,
+		})
+		req["messages"] = msgs
+	}
+
 	return nil
+}
+
+// appendReasoningPrompt appends the reasoning prompt to a user message,
+// handling both string and array content.
+func appendReasoningPrompt(msg map[string]interface{}) {
+	switch content := msg["content"].(type) {
+	case string:
+		msg["content"] = content + reasoningPrompt
+	case []interface{}:
+		msg["content"] = append(content, map[string]interface{}{
+			"type": "text",
+			"text": reasoningPrompt,
+		})
+	}
 }
 
 // TransformResponse extracts <reasoning_content>...</reasoning_content> from non-streaming responses.

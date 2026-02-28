@@ -19,6 +19,9 @@ type TransformContext struct {
 	ModelName    string
 	ProviderName string
 
+	// Params holds custom parameters from config to inject into the request body.
+	Params map[string]interface{}
+
 	// CallLog is optional; used in tests to record transform ordering.
 	CallLog *[]string
 }

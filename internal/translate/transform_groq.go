@@ -14,26 +14,9 @@ func newGroqTransform() *groqTransform {
 
 func (g *groqTransform) Name() string { return "groq" }
 
-// TransformRequest strips cache_control from messages and $schema from tool parameters.
+// TransformRequest strips $schema from tool parameters.
+// Note: cache_control stripping is handled by the cleancache transform.
 func (g *groqTransform) TransformRequest(req map[string]interface{}, ctx *TransformContext) error {
-	// Strip cache_control from messages.
-	if messages, ok := req["messages"].([]interface{}); ok {
-		for _, m := range messages {
-			msg, ok := m.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			delete(msg, "cache_control")
-			if content, ok := msg["content"].([]interface{}); ok {
-				for _, c := range content {
-					if part, ok := c.(map[string]interface{}); ok {
-						delete(part, "cache_control")
-					}
-				}
-			}
-		}
-	}
-
 	// Strip $schema from tool parameters.
 	if tools, ok := req["tools"].([]interface{}); ok {
 		for _, t := range tools {

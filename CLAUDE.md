@@ -33,7 +33,9 @@ Only the `system` field is checked for the marker — never `messages`. This pre
 │       ├── transform.go             # Schema cleaning (SchemaTransformer, fieldStripper, geminiTransformer)
 │       ├── transform_reasoning.go   # reasoning_content → thinking blocks
 │       ├── transform_enhancetool.go # Repair malformed tool call JSON
-│       ├── transform_deepseek.go    # max_tokens cap
+│       ├── transform_cleancache.go  # Strip cache_control from messages
+│       ├── transform_customparams.go # Inject custom params from config
+│       ├── transform_deepseek.go    # max_completion_tokens → max_tokens rename
 │       ├── transform_thinktag.go    # <think> tag extraction FSM
 │       ├── transform_openrouter.go  # OpenRouter quirks (tool IDs, cache_control, reasoning field)
 │       ├── transform_groq.go        # Groq quirks (cache_control, $schema, tool IDs)
@@ -103,7 +105,9 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 | `internal/translate/transform.go` | Schema cleaning transforms (generic, openai, gemini, ollama) |
 | `internal/translate/transform_reasoning.go` | Converts reasoning_content → Anthropic thinking blocks |
 | `internal/translate/transform_enhancetool.go` | Repairs malformed tool call JSON arguments |
-| `internal/translate/transform_deepseek.go` | Caps max_tokens to 8192 for DeepSeek |
+| `internal/translate/transform_cleancache.go` | Strips cache_control from messages |
+| `internal/translate/transform_customparams.go` | Injects custom params from config into request body |
+| `internal/translate/transform_deepseek.go` | Renames max_completion_tokens → max_tokens for DeepSeek |
 | `internal/translate/transform_thinktag.go` | Extracts `<think>` tags from content into thinking blocks |
 | `internal/translate/transform_openrouter.go` | Fixes OpenRouter quirks (tool IDs, cache_control, reasoning) |
 | `internal/translate/transform_groq.go` | Fixes Groq quirks (cache_control, $schema, tool IDs) |
@@ -133,6 +137,24 @@ providers:
 
 Per-model `transform` overrides the provider-level `transform` (no merging).
 
+Providers and models can also specify `params` to inject custom key-value pairs into the request body (requires `customparams` in the transform chain). Per-model `params` overrides provider-level `params`. Only new keys are added — existing request fields are never overwritten.
+
+```yaml
+providers:
+  - name: example
+    endpoint: https://api.example.com/v1
+    api_key: ${EXAMPLE_API_KEY}
+    transform: ["customparams", "schema:generic"]
+    params:
+      top_k: 40
+      presence_penalty: 0.5
+    models:
+      fast:
+        model: example-fast
+        params:              # overrides provider-level params for this model
+          top_k: 20
+```
+
 ## Available Transforms
 
 | Transform | What it does |
@@ -141,6 +163,8 @@ Per-model `transform` overrides the provider-level `transform` (no merging).
 | `schema:openai` | Strips only strict |
 | `schema:gemini` | Strips Gemini-incompatible schema fields and format values |
 | `schema:ollama` | Same as generic |
+| `cleancache` | Strips cache_control from messages (needed by most non-Anthropic providers) |
+| `customparams` | Injects custom parameters from config `params` into request body |
 | `reasoning` | Converts reasoning_content → Anthropic thinking blocks |
 | `enhancetool` | Repairs malformed tool call JSON arguments |
 | `deepseek` | Caps max_tokens to 8192 |

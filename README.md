@@ -96,12 +96,29 @@ providers:
   - name: deepseek
     endpoint: https://api.deepseek.com/v1
     api_key: ${DEEPSEEK_API_KEY}
-    transform: ["deepseek", "reasoning", "enhancetool", "schema:generic"]
+    transform: ["cleancache", "deepseek", "reasoning", "enhancetool", "schema:generic"]
     models:
       reasoner: deepseek-reasoner
       chat:
         model: deepseek-chat
-        transform: ["tooluse", "enhancetool", "schema:generic"]
+        transform: ["cleancache", "tooluse", "enhancetool", "schema:generic"]
+```
+
+You can also inject arbitrary parameters into the request body using `params` (requires `customparams` in the transform chain):
+
+```yaml
+providers:
+  - name: example
+    endpoint: https://api.example.com/v1
+    api_key: ${API_KEY}
+    transform: ["customparams", "cleancache", "schema:generic"]
+    params:
+      top_k: 40
+    models:
+      fast:
+        model: example-fast
+        params:           # per-model override
+          top_k: 20
 ```
 
 Available transforms:
@@ -115,10 +132,12 @@ Available transforms:
 | `extrathinktag`  | Extract `<think>` tags into thinking blocks (Qwen3, DeepSeek-R1)    |
 | `forcereasoning` | Inject reasoning prompt and extract `<reasoning_content>` tags      |
 | `enhancetool`    | Repair malformed tool call JSON                                     |
-| `deepseek`       | Cap `max_tokens` to 8192                                            |
+| `deepseek`       | Rename `max_completion_tokens` → `max_tokens` for DeepSeek API      |
 | `tooluse`        | Inject ExitTool for models that avoid tool use                      |
-| `openrouter`     | Fix OpenRouter quirks (tool IDs, cache_control)                     |
-| `groq`           | Fix Groq quirks (cache_control, `$schema`, tool IDs)                |
+| `cleancache`     | Strip `cache_control` from messages (needed by most non-Anthropic providers) |
+| `customparams`   | Inject custom parameters from config `params` into request body     |
+| `openrouter`     | Fix OpenRouter quirks (tool IDs, reasoning field)                   |
+| `groq`           | Fix Groq quirks (`$schema`, numeric tool IDs)                       |
 
 ## Building from source
 

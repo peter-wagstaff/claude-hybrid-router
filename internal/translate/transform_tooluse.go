@@ -10,6 +10,8 @@ type toolUseTransform struct{}
 
 func (t *toolUseTransform) Name() string { return "tooluse" }
 
+const toolUseSystemPrompt = `Tool mode is active. You must proactively execute the most suitable tool to help complete the task. Before invoking a tool, carefully evaluate whether it matches the current task. If no available tool is appropriate, you MUST call ExitTool to exit tool mode. Always prioritize completing the user's task effectively and efficiently by using tools whenever appropriate.`
+
 // exitToolDef is the ExitTool appended to the tools array.
 var exitToolDef = map[string]interface{}{
 	"type": "function",
@@ -26,7 +28,8 @@ var exitToolDef = map[string]interface{}{
 	},
 }
 
-// TransformRequest appends ExitTool to tools and sets tool_choice to "required".
+// TransformRequest appends ExitTool to tools, sets tool_choice to "required",
+// and adds a system reminder about tool mode.
 func (t *toolUseTransform) TransformRequest(req map[string]interface{}, ctx *TransformContext) error {
 	tools, ok := req["tools"].([]interface{})
 	if !ok || len(tools) == 0 {
@@ -35,6 +38,14 @@ func (t *toolUseTransform) TransformRequest(req map[string]interface{}, ctx *Tra
 
 	req["tools"] = append(tools, exitToolDef)
 	req["tool_choice"] = "required"
+
+	// Append tool-mode system reminder at end of messages for recency salience.
+	if msgs, ok := req["messages"].([]interface{}); ok {
+		req["messages"] = append(msgs, map[string]interface{}{
+			"role":    "system",
+			"content": toolUseSystemPrompt,
+		})
+	}
 	return nil
 }
 

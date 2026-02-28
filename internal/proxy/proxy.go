@@ -317,6 +317,7 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		chain = translate.NewTransformChain()
 	}
 	ctx := translate.NewTransformContext(resolved.Model, resolved.Provider)
+	ctx.Params = resolved.Params
 
 	// Translate request body
 	oaiBody, err := translate.RequestToOpenAI(body, resolved.Model, resolved.MaxTokens)

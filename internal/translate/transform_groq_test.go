@@ -6,24 +6,11 @@ import (
 	"testing"
 )
 
-func TestGroqRequest_StripSchemaAndCacheControl(t *testing.T) {
+func TestGroqRequest_StripSchema(t *testing.T) {
 	tr := newGroqTransform()
 	ctx := NewTransformContext("model", "groq")
 
 	req := map[string]interface{}{
-		"messages": []interface{}{
-			map[string]interface{}{
-				"role":          "user",
-				"cache_control": map[string]interface{}{"type": "ephemeral"},
-				"content": []interface{}{
-					map[string]interface{}{
-						"type":          "text",
-						"text":          "hello",
-						"cache_control": map[string]interface{}{"type": "ephemeral"},
-					},
-				},
-			},
-		},
 		"tools": []interface{}{
 			map[string]interface{}{
 				"type": "function",
@@ -40,18 +27,6 @@ func TestGroqRequest_StripSchemaAndCacheControl(t *testing.T) {
 
 	if err := tr.TransformRequest(req, ctx); err != nil {
 		t.Fatalf("TransformRequest error: %v", err)
-	}
-
-	// Check cache_control stripped from message.
-	msg := req["messages"].([]interface{})[0].(map[string]interface{})
-	if _, ok := msg["cache_control"]; ok {
-		t.Error("expected cache_control stripped from message")
-	}
-
-	// Check cache_control stripped from content part.
-	part := msg["content"].([]interface{})[0].(map[string]interface{})
-	if _, ok := part["cache_control"]; ok {
-		t.Error("expected cache_control stripped from content part")
 	}
 
 	// Check $schema stripped from tool parameters.

@@ -27,7 +27,7 @@ type AMessage struct {
 	Content json.RawMessage `json:"content"` // string or []ContentBlock
 }
 
-// ContentBlock is an Anthropic content block (text, tool_use, tool_result).
+// ContentBlock is an Anthropic content block (text, tool_use, tool_result, thinking).
 type ContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -37,6 +37,7 @@ type ContentBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"` // tool_result
 	Content   json.RawMessage `json:"content,omitempty"`    // tool_result (string or []ContentBlock)
 	IsError   bool            `json:"is_error,omitempty"`   // tool_result
+	Thinking  string          `json:"thinking,omitempty"`   // thinking block content
 }
 
 // ATool is an Anthropic tool definition.
@@ -67,6 +68,7 @@ type OMessage struct {
 	Content    string      `json:"content,omitempty"`
 	ToolCalls  []OToolCall `json:"tool_calls,omitempty"`  // assistant
 	ToolCallID string      `json:"tool_call_id,omitempty"` // tool
+	Thinking   string      `json:"thinking,omitempty"`    // preserved from Anthropic thinking blocks
 }
 
 // OToolCall is an OpenAI tool call in an assistant message.
@@ -225,6 +227,10 @@ func translateAssistantBlocks(blocks []ContentBlock) ([]OMessage, error) {
 		case "text":
 			if b.Text != "" {
 				textParts = append(textParts, b.Text)
+			}
+		case "thinking":
+			if b.Thinking != "" {
+				msg.Thinking = b.Thinking
 			}
 		case "tool_use":
 			args := string(b.Input)

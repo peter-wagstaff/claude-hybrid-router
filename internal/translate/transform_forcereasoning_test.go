@@ -358,6 +358,102 @@ func TestForceReasoningStream_PartialTag(t *testing.T) {
 	}
 }
 
+func TestForceReasoningRequest_ArrayContent(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	req := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{
+				"role": "user",
+				"content": []interface{}{
+					map[string]interface{}{"type": "text", "text": "Hello"},
+				},
+			},
+		},
+	}
+
+	if err := tr.TransformRequest(req, ctx); err != nil {
+		t.Fatalf("TransformRequest error: %v", err)
+	}
+
+	msgs := req["messages"].([]interface{})
+	content := msgs[0].(map[string]interface{})["content"].([]interface{})
+	if len(content) != 2 {
+		t.Fatalf("expected 2 content blocks, got %d", len(content))
+	}
+	last := content[1].(map[string]interface{})
+	if last["text"] != reasoningPrompt {
+		t.Errorf("expected reasoning prompt appended as text block, got %q", last["text"])
+	}
+}
+
+func TestForceReasoningRequest_PriorThinkingReinjection(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	req := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "What is 2+2?"},
+			map[string]interface{}{
+				"role":     "assistant",
+				"content":  "4",
+				"thinking": "2+2 is basic arithmetic",
+			},
+			map[string]interface{}{"role": "user", "content": "Why?"},
+		},
+	}
+
+	if err := tr.TransformRequest(req, ctx); err != nil {
+		t.Fatalf("TransformRequest error: %v", err)
+	}
+
+	msgs := req["messages"].([]interface{})
+	assistant := msgs[1].(map[string]interface{})
+	content := assistant["content"].(string)
+
+	if !strings.Contains(content, "<reasoning_content>2+2 is basic arithmetic</reasoning_content>") {
+		t.Errorf("expected thinking re-injected as reasoning tags, got %q", content)
+	}
+	if !strings.HasSuffix(content, "\n4") {
+		t.Errorf("expected original content preserved after tags, got %q", content)
+	}
+	if _, ok := assistant["thinking"]; ok {
+		t.Error("thinking field should be deleted after re-injection")
+	}
+}
+
+func TestForceReasoningRequest_ToolAsLastMessage(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	req := map[string]interface{}{
+		"model": "gpt-4",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "Use a tool"},
+			map[string]interface{}{"role": "tool", "content": "tool result", "tool_call_id": "call_1"},
+		},
+	}
+
+	if err := tr.TransformRequest(req, ctx); err != nil {
+		t.Fatalf("TransformRequest error: %v", err)
+	}
+
+	msgs := req["messages"].([]interface{})
+	if len(msgs) != 3 {
+		t.Fatalf("expected 3 messages (user + tool + appended user), got %d", len(msgs))
+	}
+	appended := msgs[2].(map[string]interface{})
+	if appended["role"] != "user" {
+		t.Errorf("appended message role = %v, want user", appended["role"])
+	}
+	if appended["content"] != reasoningPrompt {
+		t.Errorf("appended message content = %q, want reasoning prompt", appended["content"])
+	}
+}
+
 func TestForceReasoningStream_PreTagContent(t *testing.T) {
 	tr := newForceReasoningTransform()
 	ctx := NewTransformContext("gpt-4", "openai")

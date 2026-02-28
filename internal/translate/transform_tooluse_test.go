@@ -8,6 +8,9 @@ import (
 func TestToolUseRequest_InjectExitTool(t *testing.T) {
 	req := map[string]interface{}{
 		"model": "test",
+		"messages": []interface{}{
+			map[string]interface{}{"role": "user", "content": "hello"},
+		},
 		"tools": []interface{}{
 			map[string]interface{}{
 				"type": "function",
@@ -44,6 +47,19 @@ func TestToolUseRequest_InjectExitTool(t *testing.T) {
 	}
 	if fn["description"] == nil || fn["description"] == "" {
 		t.Error("ExitTool should have a description")
+	}
+
+	// Check system prompt was appended to messages.
+	msgs := req["messages"].([]interface{})
+	if len(msgs) != 2 {
+		t.Fatalf("messages length = %d, want 2", len(msgs))
+	}
+	sysMsg := msgs[1].(map[string]interface{})
+	if sysMsg["role"] != "system" {
+		t.Errorf("appended message role = %v, want system", sysMsg["role"])
+	}
+	if sysMsg["content"] != toolUseSystemPrompt {
+		t.Error("appended system message should contain tool use prompt")
 	}
 }
 
