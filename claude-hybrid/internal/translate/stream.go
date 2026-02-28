@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"strings"
 )
 
@@ -57,6 +58,9 @@ type StreamTranslator struct {
 	// Transform chain for stream chunk processing
 	chain *TransformChain
 	ctx   *TransformContext
+	// Verbose logging and consecutive drop tracking
+	verbose          bool
+	consecutiveDrops int
 }
 
 type activeToolCall struct {
@@ -71,6 +75,11 @@ func NewStreamTranslator(modelLabel string) *StreamTranslator {
 		msgID:      "msg_stream",
 		toolCalls:  make(map[int]*activeToolCall),
 	}
+}
+
+// SetVerbose enables verbose logging of dropped SSE chunks.
+func (st *StreamTranslator) SetVerbose(v bool) {
+	st.verbose = v
 }
 
 // SetTransformChain sets the transform chain and context for stream chunk processing.
@@ -99,21 +108,42 @@ func (st *StreamTranslator) TranslateStream(r io.Reader, w io.Writer) error {
 
 		var chunk OStreamChunk
 		if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-			continue // Skip unparseable chunks
+			st.consecutiveDrops++
+			if st.verbose {
+				log.Printf("[LOCAL_ERR:PARSE] dropped unparseable SSE chunk: %.200s", data)
+			}
+			if st.consecutiveDrops >= 3 {
+				return fmt.Errorf("too many consecutive unparseable chunks (%d)", st.consecutiveDrops)
+			}
+			continue
 		}
+		st.consecutiveDrops = 0
 
 		// Run stream transforms if chain is set
 		if st.chain != nil && st.ctx != nil {
 			transformedChunks, err := st.chain.RunStreamChunk([]byte(data), st.ctx)
 			if err != nil {
+				st.consecutiveDrops++
+				if st.verbose {
+					log.Printf("[LOCAL_ERR:TRANSLATE] stream transform error: %v", err)
+				}
+				if st.consecutiveDrops >= 3 {
+					return fmt.Errorf("too many consecutive stream transform errors (%d)", st.consecutiveDrops)
+				}
 				continue
 			}
+			st.consecutiveDrops = 0
 			// Process each transformed chunk through the state machine
 			for _, tc := range transformedChunks {
 				var transformedChunk OStreamChunk
 				if json.Unmarshal(tc, &transformedChunk) != nil {
+					st.consecutiveDrops++
+					if st.consecutiveDrops >= 3 {
+						return fmt.Errorf("too many consecutive unparseable transformed chunks (%d)", st.consecutiveDrops)
+					}
 					continue
 				}
+				st.consecutiveDrops = 0
 				st.processChunk(w, transformedChunk)
 			}
 			continue

@@ -112,8 +112,8 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 | `internal/translate/transform_forcereasoning.go` | Injects reasoning prompt and extracts reasoning tags |
 | `internal/translate/jsonfix.go` | Relaxed JSON parser for tool argument repair |
 | `internal/translate/request.go` | Anthropic Messages API → OpenAI Chat Completions API request translation |
-| `internal/translate/response.go` | OpenAI → Anthropic response translation (text, tool use, errors) |
-| `internal/translate/stream.go` | OpenAI SSE → Anthropic SSE streaming state machine |
+| `internal/translate/response.go` | OpenAI → Anthropic response translation, error classification (ClassifyError), SSE error formatting (FormatStreamError) |
+| `internal/translate/stream.go` | OpenAI SSE → Anthropic SSE streaming state machine, consecutive-drop abort |
 
 ## Provider Config with Transforms
 
@@ -153,7 +153,7 @@ Per-model `transform` overrides the provider-level `transform` (no merging).
 
 ## Testing
 
-Tests run in-process — no external services needed. Certificates are generated programmatically in memory. The proxy, echo server, and mock OpenAI server start in goroutines. Tests exercise: clean request forwarding, GET requests, keep-alive (multiple requests per tunnel), local route detection (non-streaming and streaming), marker stripping, marker-in-messages passthrough, auth header sanitization in logs, request/response translation, streaming translation, tool use round-trips, error handling.
+Tests run in-process — no external services needed. Certificates are generated programmatically in memory. The proxy, echo server, and mock OpenAI server start in goroutines. Tests exercise: clean request forwarding, GET requests, keep-alive (multiple requests per tunnel), local route detection (non-streaming and streaming), marker stripping, marker-in-messages passthrough, auth header sanitization in logs, request/response translation, streaming translation, tool use round-trips, error handling, and local provider error propagation (truncated responses, garbled SSE streams).
 
 ## Development Notes
 
@@ -163,5 +163,6 @@ Tests run in-process — no external services needed. Certificates are generated
 - CA certs stored in `~/.claude-hybrid/certs/` (auto-generated on first run)
 - Provider config at `~/.claude-hybrid/config.yaml` (optional)
 - Logs written to `~/.claude-hybrid/proxy.log` (auto-truncated daily)
-- `--verbose` enables detailed logging; default is sparse (LOCAL_ROUTE + LOCAL_OK)
+- `--verbose` enables detailed logging (including dropped SSE chunks); default is sparse (LOCAL_ROUTE + LOCAL_OK + LOCAL_ERR)
+- Error log prefixes: `[LOCAL_ERR:CONNECTION]`, `[LOCAL_ERR:TIMEOUT]`, `[LOCAL_ERR:HTTP_N]`, `[LOCAL_ERR:TRANSLATE]`, `[LOCAL_ERR:PARSE]`
 - Single static binary — no runtime dependencies

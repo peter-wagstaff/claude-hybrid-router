@@ -1,9 +1,11 @@
 package translate
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 // OpenAI response types
@@ -154,6 +156,39 @@ func mapFinishReason(fr string) string {
 	default:
 		return "end_turn"
 	}
+}
+
+// ClassifyError categorizes an error for logging and user-facing messages.
+func ClassifyError(err error) string {
+	if err == nil {
+		return "INTERNAL"
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "no such host") ||
+		strings.Contains(msg, "dial tcp"):
+		return "CONNECTION"
+	case strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "Client.Timeout") ||
+		strings.Contains(msg, "context canceled"):
+		return "TIMEOUT"
+	default:
+		return "INTERNAL"
+	}
+}
+
+// FormatStreamError creates SSE events for a mid-stream error: an error event followed by message_stop.
+func FormatStreamError(errType, message string) []byte {
+	errData, _ := json.Marshal(AErrorResponse{
+		Type:  "error",
+		Error: AError{Type: errType, Message: message},
+	})
+	var buf bytes.Buffer
+	fmt.Fprintf(&buf, "event: error\ndata: %s\n\n", errData)
+	stopData, _ := json.Marshal(map[string]string{"type": "message_stop"})
+	fmt.Fprintf(&buf, "event: message_stop\ndata: %s\n\n", stopData)
+	return buf.Bytes()
 }
 
 // FormatError creates an Anthropic-format error response body.

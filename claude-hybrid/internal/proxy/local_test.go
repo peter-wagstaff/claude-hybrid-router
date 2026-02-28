@@ -371,6 +371,56 @@ func TestLocalRouteProviderDown(t *testing.T) {
 	}
 }
 
+func TestLocalRouteResponseReadError(t *testing.T) {
+	// Start a server that sends an incomplete response body (triggers read error)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			conn.Read(buf)
+			conn.Write([]byte("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 10000\r\n\r\n{\"partial"))
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+
+	resolver, _ := config.NewModelResolver(&config.ProvidersConfig{
+		Providers: []config.ProviderConfig{{
+			Name:     "broken",
+			Endpoint: fmt.Sprintf("http://127.0.0.1:%d/v1", port),
+			Models:   map[string]config.ModelConfig{"broken_model": {Model: "x"}},
+		}},
+	})
+
+	infra := setupLocalInfra(t, resolver)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"model":    "claude-sonnet-4-20250514",
+		"system":   "<!-- @proxy-local-route:af83e9 model=broken_model --> You are helpful",
+		"messages": []map[string]string{{"role": "user", "content": "hello"}},
+	})
+
+	status, respBody, _ := localProxyRequest(t, infra, infra.upstreamPort, body)
+
+	if status != 502 {
+		t.Fatalf("expected 502, got %d: %s", status, respBody)
+	}
+
+	var errResp translate.AErrorResponse
+	json.Unmarshal([]byte(respBody), &errResp)
+	if errResp.Type != "error" {
+		t.Errorf("expected error type, got %s", errResp.Type)
+	}
+}
+
 func TestLocalRouteNoResolverFallsBackToStub(t *testing.T) {
 	// No resolver configured — should fall back to stub response
 	infra := setupLocalInfra(t, nil)
@@ -640,5 +690,66 @@ func TestLocalRouteWithUnknownTransform(t *testing.T) {
 	}
 	if !strings.Contains(resp.Content[0].Text, "mock-model-v1") {
 		t.Errorf("response should mention backend model: %s", resp.Content[0].Text)
+	}
+}
+
+func TestLocalRouteStreamTranslationError(t *testing.T) {
+	// Mock server that returns HTTP 200 with SSE content-type but garbled data
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			buf := make([]byte, 4096)
+			conn.Read(buf)
+			resp := "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n\r\n" +
+				"data: {not valid json at all\n\n" +
+				"data: {also broken\n\n" +
+				"data: [DONE]\n\n"
+			conn.Write([]byte(resp))
+			conn.Close()
+		}
+	}()
+	t.Cleanup(func() { ln.Close() })
+
+	resolver, _ := config.NewModelResolver(&config.ProvidersConfig{
+		Providers: []config.ProviderConfig{{
+			Name:     "broken",
+			Endpoint: fmt.Sprintf("http://127.0.0.1:%d/v1", port),
+			Models:   map[string]config.ModelConfig{"broken_model": {Model: "x"}},
+		}},
+	})
+
+	infra := setupLocalInfra(t, resolver)
+
+	body, _ := json.Marshal(map[string]interface{}{
+		"model":      "claude-sonnet-4-20250514",
+		"system":     "<!-- @proxy-local-route:af83e9 model=broken_model --> You are helpful",
+		"messages":   []map[string]string{{"role": "user", "content": "hello"}},
+		"max_tokens": 1024,
+		"stream":     true,
+	})
+
+	status, respBody, contentType := localProxyRequest(t, infra, infra.upstreamPort, body)
+
+	// The stream translator handles garbled data gracefully:
+	// - Unparseable chunks are skipped (not a fatal error)
+	// - TranslateStream returns nil (scanner.Err() is nil)
+	// - We get a 200 SSE response with message_stop (even if no content was produced)
+	// The key thing: we should get SOME response, not a silent close
+	if status != 200 {
+		t.Fatalf("expected 200, got %d: %s", status, respBody)
+	}
+	if !strings.Contains(contentType, "text/event-stream") {
+		t.Errorf("expected SSE content type, got %s", contentType)
+	}
+	if !strings.Contains(respBody, "message_stop") {
+		t.Error("expected message_stop event in response")
 	}
 }

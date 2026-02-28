@@ -334,10 +334,13 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 	var oaiReq map[string]interface{}
 	if err := json.Unmarshal(oaiBody, &oaiReq); err == nil {
 		if err := chain.RunRequest(oaiReq, ctx); err != nil {
-			log.Printf("request transform failed: %v", err)
-		} else {
-			oaiBody, _ = json.Marshal(oaiReq)
+			log.Printf("[LOCAL_ERR:TRANSLATE] request transform failed for %s: %v", modelLabel, err)
+			errBody := translate.FormatError("api_error",
+				fmt.Sprintf("[TRANSLATE] Request transform failed for '%s': %v", modelLabel, err))
+			sendAnthropicError(w, 500, errBody)
+			return
 		}
+		oaiBody, _ = json.Marshal(oaiReq)
 	}
 
 	// Determine if streaming
@@ -365,9 +368,10 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 
 	resp, err := p.localClient.Do(localReq)
 	if err != nil {
-		log.Printf("local provider error for %s: %v", resolved.Provider, err)
+		cat := translate.ClassifyError(err)
+		log.Printf("[LOCAL_ERR:%s] %s unreachable: %v (%s)", cat, modelLabel, err, endpoint)
 		errBody := translate.FormatError("api_error",
-			fmt.Sprintf("Local model '%s' unreachable: %v (%s)", modelLabel, err, endpoint))
+			fmt.Sprintf("[%s] Local model '%s' unreachable: %v (%s)", cat, modelLabel, err, endpoint))
 		sendAnthropicError(w, 502, errBody)
 		return
 	}
@@ -375,9 +379,9 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		log.Printf("local provider returned %d: %s", resp.StatusCode, respBody)
+		log.Printf("[LOCAL_ERR:HTTP_%d] %s returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, respBody)
 		errBody := translate.FormatError("api_error",
-			fmt.Sprintf("Local provider returned %d: %s", resp.StatusCode, string(respBody)))
+			fmt.Sprintf("[HTTP_%d] Local provider '%s' returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, string(respBody)))
 		sendAnthropicError(w, 502, errBody)
 		return
 	}
@@ -386,28 +390,45 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		// Stream: translate OpenAI SSE → Anthropic SSE
 		var sseBuf bytes.Buffer
 		st := translate.NewStreamTranslator(modelLabel)
+		st.SetVerbose(p.verbose)
 		st.SetTransformChain(chain, ctx)
-		if err := st.TranslateStream(resp.Body, &sseBuf); err != nil {
-			log.Printf("stream translation error: %v", err)
-			return
-		}
+		streamErr := st.TranslateStream(resp.Body, &sseBuf)
 		sseBody := sseBuf.Bytes()
+		if streamErr != nil {
+			cat := translate.ClassifyError(streamErr)
+			log.Printf("[LOCAL_ERR:%s] stream translation error for %s: %v", cat, modelLabel, streamErr)
+			if len(sseBody) == 0 {
+				errBody := translate.FormatError("api_error",
+					fmt.Sprintf("[%s] Stream translation failed for '%s': %v", cat, modelLabel, streamErr))
+				sendAnthropicError(w, 502, errBody)
+				return
+			}
+			sseBody = append(sseBody, translate.FormatStreamError("api_error",
+				fmt.Sprintf("[%s] Stream interrupted for '%s': %v", cat, modelLabel, streamErr))...)
+		}
 		fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: %d\r\n\r\n", len(sseBody))
 		w.Write(sseBody)
-		log.Printf("LOCAL_OK %s → %s/%s (streaming, %dms)",
-			modelLabel, resolved.Provider, resolved.Model, time.Since(start).Milliseconds())
+		if streamErr == nil {
+			log.Printf("LOCAL_OK %s → %s/%s (streaming, %dms)",
+				modelLabel, resolved.Provider, resolved.Model, time.Since(start).Milliseconds())
+		}
 	} else {
 		// Non-streaming: translate response
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxBodyBytes+1))
 		if err != nil {
-			log.Printf("local response read error: %v", err)
+			cat := translate.ClassifyError(err)
+			log.Printf("[LOCAL_ERR:%s] response read error for %s: %v", cat, modelLabel, err)
+			errBody := translate.FormatError("api_error",
+				fmt.Sprintf("[%s] Failed to read response from '%s': %v", cat, modelLabel, err))
+			sendAnthropicError(w, 502, errBody)
 			return
 		}
 		respBody, _ = chain.RunResponse(respBody, ctx)
 		aBody, err := translate.ResponseToAnthropic(respBody, modelLabel)
 		if err != nil {
-			log.Printf("response translation failed: %v", err)
-			errBody := translate.FormatError("api_error", fmt.Sprintf("Response translation failed: %v", err))
+			log.Printf("[LOCAL_ERR:TRANSLATE] response translation failed for %s: %v", modelLabel, err)
+			errBody := translate.FormatError("api_error",
+				fmt.Sprintf("[TRANSLATE] Response translation failed for '%s': %v", modelLabel, err))
 			sendAnthropicError(w, 502, errBody)
 			return
 		}

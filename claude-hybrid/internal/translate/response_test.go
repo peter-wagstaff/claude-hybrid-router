@@ -2,6 +2,8 @@ package translate
 
 import (
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -160,6 +162,41 @@ func TestResponseNoChoices(t *testing.T) {
 	_, err := ResponseToAnthropic([]byte(input), "m")
 	if err == nil {
 		t.Error("expected error for no choices")
+	}
+}
+
+func TestClassifyError(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{"connection refused", fmt.Errorf("dial tcp 127.0.0.1:1: connect: connection refused"), "CONNECTION"},
+		{"timeout", fmt.Errorf("context deadline exceeded"), "TIMEOUT"},
+		{"client timeout", fmt.Errorf("Client.Timeout exceeded"), "TIMEOUT"},
+		{"generic error", fmt.Errorf("something unexpected"), "INTERNAL"},
+		{"nil error", nil, "INTERNAL"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cat := ClassifyError(tt.err)
+			if cat != tt.expected {
+				t.Errorf("ClassifyError(%v) = %q, want %q", tt.err, cat, tt.expected)
+			}
+		})
+	}
+}
+
+func TestFormatStreamError(t *testing.T) {
+	out := FormatStreamError("api_error", "something broke")
+	if !strings.Contains(string(out), "event: error") {
+		t.Error("expected SSE error event")
+	}
+	if !strings.Contains(string(out), "something broke") {
+		t.Error("expected error message in output")
+	}
+	if !strings.Contains(string(out), "event: message_stop") {
+		t.Error("expected message_stop after error")
 	}
 }
 
