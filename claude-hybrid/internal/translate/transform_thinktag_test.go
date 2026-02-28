@@ -267,6 +267,143 @@ func TestThinkTagStream_NoThinkTag(t *testing.T) {
 	}
 }
 
+func TestThinkTagStream_HandleFinal(t *testing.T) {
+	tr := newThinkTagTransform()
+	ctx := NewTransformContext("qwen3", "ollama")
+
+	// Chunk 1: <think> + reasoning
+	chunk1 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "<think>reasoning",
+				},
+			},
+		},
+	})
+	_, err := tr.TransformStreamChunk(chunk1, ctx)
+	if err != nil {
+		t.Fatalf("chunk1 error: %v", err)
+	}
+
+	// Chunk 2: </think> only
+	chunk2 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "</think>",
+				},
+			},
+		},
+	})
+	_, err = tr.TransformStreamChunk(chunk2, ctx)
+	if err != nil {
+		t.Fatalf("chunk2 error: %v", err)
+	}
+
+	// Chunk 3: final content (exercises handleFinal)
+	chunk3 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "the answer",
+				},
+			},
+		},
+	})
+	results3, err := tr.TransformStreamChunk(chunk3, ctx)
+	if err != nil {
+		t.Fatalf("chunk3 error: %v", err)
+	}
+
+	if len(results3) != 1 {
+		t.Fatalf("expected 1 chunk from chunk3, got %d", len(results3))
+	}
+	var parsed map[string]interface{}
+	json.Unmarshal(results3[0], &parsed)
+	delta := parsed["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
+	if delta["content"] != "the answer" {
+		t.Errorf("content = %q, want %q", delta["content"], "the answer")
+	}
+	if !ctx.HasTextContent {
+		t.Error("expected HasTextContent = true after handleFinal")
+	}
+}
+
+func TestThinkTagStream_PartialTag(t *testing.T) {
+	tr := newThinkTagTransform()
+	ctx := NewTransformContext("qwen3", "ollama")
+
+	// Chunk 1: text + partial <think> tag
+	chunk1 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "hello<thi",
+				},
+			},
+		},
+	})
+	results1, err := tr.TransformStreamChunk(chunk1, ctx)
+	if err != nil {
+		t.Fatalf("chunk1 error: %v", err)
+	}
+
+	// Should emit "hello" as content (partial tag buffered)
+	if len(results1) != 1 {
+		t.Fatalf("expected 1 chunk from chunk1, got %d", len(results1))
+	}
+	var parsed1 map[string]interface{}
+	json.Unmarshal(results1[0], &parsed1)
+	delta1 := parsed1["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
+	if delta1["content"] != "hello" {
+		t.Errorf("chunk1 content = %q, want %q", delta1["content"], "hello")
+	}
+
+	// Chunk 2: rest of tag + reasoning + close + answer
+	chunk2 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "nk>reasoning</think>answer",
+				},
+			},
+		},
+	})
+	results2, err := tr.TransformStreamChunk(chunk2, ctx)
+	if err != nil {
+		t.Fatalf("chunk2 error: %v", err)
+	}
+
+	var foundThinking, foundAnswer bool
+	for _, r := range results2 {
+		var parsed map[string]interface{}
+		json.Unmarshal(r, &parsed)
+		choices := parsed["choices"].([]interface{})
+		delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+
+		if th, ok := delta["thinking"].(map[string]interface{}); ok {
+			if th["content"] == "reasoning" {
+				foundThinking = true
+			}
+		}
+		if c, ok := delta["content"].(string); ok && c == "answer" {
+			foundAnswer = true
+		}
+	}
+	if !foundThinking {
+		t.Error("expected thinking chunk with 'reasoning'")
+	}
+	if !foundAnswer {
+		t.Error("expected content chunk with 'answer'")
+	}
+}
+
 func TestThinkTagStream_ThinkingOnly(t *testing.T) {
 	tr := newThinkTagTransform()
 	ctx := NewTransformContext("qwen3", "ollama")

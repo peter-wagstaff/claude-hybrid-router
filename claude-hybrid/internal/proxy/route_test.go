@@ -143,18 +143,7 @@ func TestSendLocalStub_Streaming(t *testing.T) {
 		t.Error("missing SSE content type")
 	}
 
-	for _, event := range []string{
-		"event: message_start",
-		"event: content_block_start",
-		"event: content_block_delta",
-		"event: content_block_stop",
-		"event: message_delta",
-		"event: message_stop",
-	} {
-		if !strings.Contains(output, event) {
-			t.Errorf("missing SSE event: %s", event)
-		}
-	}
+	assertSSELifecycle(t, output)
 	if !strings.Contains(output, "test_model") {
 		t.Error("missing model in SSE output")
 	}

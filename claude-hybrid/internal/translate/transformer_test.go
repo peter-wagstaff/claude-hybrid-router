@@ -1,7 +1,6 @@
 package translate
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 	"testing"
@@ -411,6 +410,3 @@ func TestSchemaTransformViaChain(t *testing.T) {
 	}
 }
 
-// Suppress unused import warning — json is used in transform_test.go (same package)
-// but we include it here to ensure compilation.
-var _ = json.Marshal

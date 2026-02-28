@@ -217,3 +217,195 @@ func TestForceReasoningStream_ExtractTags(t *testing.T) {
 		t.Error("expected HasTextContent = true")
 	}
 }
+
+func TestForceReasoningStream_HandleFinal(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	// Chunk 1: opening tag + thinking
+	chunk1 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "<reasoning_content>thinking...",
+				},
+			},
+		},
+	})
+	_, err := tr.TransformStreamChunk(chunk1, ctx)
+	if err != nil {
+		t.Fatalf("chunk1 error: %v", err)
+	}
+
+	// Chunk 2: close tag only (no content after)
+	chunk2 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "</reasoning_content>",
+				},
+			},
+		},
+	})
+	_, err = tr.TransformStreamChunk(chunk2, ctx)
+	if err != nil {
+		t.Fatalf("chunk2 error: %v", err)
+	}
+
+	// Chunk 3: final content (exercises handleFinal)
+	chunk3 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "The final answer",
+				},
+			},
+		},
+	})
+	results3, err := tr.TransformStreamChunk(chunk3, ctx)
+	if err != nil {
+		t.Fatalf("chunk3 error: %v", err)
+	}
+
+	if len(results3) != 1 {
+		t.Fatalf("expected 1 chunk from chunk3, got %d", len(results3))
+	}
+
+	var parsed map[string]interface{}
+	if err := json.Unmarshal(results3[0], &parsed); err != nil {
+		t.Fatalf("unmarshal chunk3: %v", err)
+	}
+	delta := parsed["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
+	if delta["content"] != "The final answer" {
+		t.Errorf("content = %q, want %q", delta["content"], "The final answer")
+	}
+	if !ctx.HasTextContent {
+		t.Error("expected HasTextContent = true after handleFinal")
+	}
+}
+
+func TestForceReasoningStream_PartialTag(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	// Chunk 1: text + partial opening tag
+	chunk1 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "some text<reasoning_",
+				},
+			},
+		},
+	})
+	results1, err := tr.TransformStreamChunk(chunk1, ctx)
+	if err != nil {
+		t.Fatalf("chunk1 error: %v", err)
+	}
+
+	// Should emit "some text" as content (partial tag buffered)
+	if len(results1) != 1 {
+		t.Fatalf("expected 1 chunk from chunk1, got %d", len(results1))
+	}
+	var parsed1 map[string]interface{}
+	json.Unmarshal(results1[0], &parsed1)
+	delta1 := parsed1["choices"].([]interface{})[0].(map[string]interface{})["delta"].(map[string]interface{})
+	if delta1["content"] != "some text" {
+		t.Errorf("chunk1 content = %q, want %q", delta1["content"], "some text")
+	}
+
+	// Chunk 2: rest of tag + thinking + close + answer
+	chunk2 := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "content>step 1</reasoning_content>answer",
+				},
+			},
+		},
+	})
+	results2, err := tr.TransformStreamChunk(chunk2, ctx)
+	if err != nil {
+		t.Fatalf("chunk2 error: %v", err)
+	}
+
+	var foundThinking, foundAnswer bool
+	for _, r := range results2 {
+		var parsed map[string]interface{}
+		json.Unmarshal(r, &parsed)
+		choices := parsed["choices"].([]interface{})
+		delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+
+		if th, ok := delta["thinking"].(map[string]interface{}); ok {
+			if th["content"] == "step 1" {
+				foundThinking = true
+			}
+		}
+		if c, ok := delta["content"].(string); ok && c == "answer" {
+			foundAnswer = true
+		}
+	}
+	if !foundThinking {
+		t.Error("expected thinking chunk with 'step 1'")
+	}
+	if !foundAnswer {
+		t.Error("expected content chunk with 'answer'")
+	}
+}
+
+func TestForceReasoningStream_PreTagContent(t *testing.T) {
+	tr := newForceReasoningTransform()
+	ctx := NewTransformContext("gpt-4", "openai")
+
+	// Single chunk with content before tag, thinking, and answer
+	chunk := mustJSON(map[string]interface{}{
+		"choices": []interface{}{
+			map[string]interface{}{
+				"index": 0,
+				"delta": map[string]interface{}{
+					"content": "Let me think. <reasoning_content>step 1</reasoning_content>The answer.",
+				},
+			},
+		},
+	})
+	results, err := tr.TransformStreamChunk(chunk, ctx)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+
+	var foundPreContent, foundThinking, foundAnswer bool
+	for _, r := range results {
+		var parsed map[string]interface{}
+		json.Unmarshal(r, &parsed)
+		choices := parsed["choices"].([]interface{})
+		delta := choices[0].(map[string]interface{})["delta"].(map[string]interface{})
+
+		if c, ok := delta["content"].(string); ok {
+			if c == "Let me think. " {
+				foundPreContent = true
+			}
+			if c == "The answer." {
+				foundAnswer = true
+			}
+		}
+		if th, ok := delta["thinking"].(map[string]interface{}); ok {
+			if th["content"] == "step 1" {
+				foundThinking = true
+			}
+		}
+	}
+	if !foundPreContent {
+		t.Error("expected content chunk with 'Let me think. '")
+	}
+	if !foundThinking {
+		t.Error("expected thinking chunk with 'step 1'")
+	}
+	if !foundAnswer {
+		t.Error("expected content chunk with 'The answer.'")
+	}
+}

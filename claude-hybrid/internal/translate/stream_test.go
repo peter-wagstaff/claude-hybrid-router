@@ -260,3 +260,54 @@ func TestStreamMessageID(t *testing.T) {
 		t.Error("message ID not prefixed with msg_")
 	}
 }
+
+func TestStreamConsecutiveDropAbort(t *testing.T) {
+	// 3 unparseable SSE lines without [DONE] — should trigger consecutive drop abort
+	input := "data: {bad\n\ndata: {bad\n\ndata: {bad\n\n"
+
+	var buf bytes.Buffer
+	st := NewStreamTranslator("m")
+	err := st.TranslateStream(strings.NewReader(input), &buf)
+
+	if err == nil {
+		t.Fatal("expected error from consecutive unparseable chunks")
+	}
+	if !strings.Contains(err.Error(), "consecutive") {
+		t.Errorf("error = %q, want to contain 'consecutive'", err.Error())
+	}
+}
+
+func TestStreamTransformBadOutputAbort(t *testing.T) {
+	// Valid JSON input chunks, but a transform that returns unparseable output chunks.
+	// This exercises the consecutive drop path at lines 139-143 in stream.go.
+	input := makeSSE(
+		chunk("resp1", strPtr("Hello"), nil),
+	)
+
+	// Transform returns 3 unparseable chunks from a single input chunk
+	badOutputTransform := &mockTransformer{
+		name: "badoutput",
+		streamChunkFn: func(data []byte, ctx *TransformContext) ([][]byte, error) {
+			return [][]byte{
+				[]byte("{bad"),
+				[]byte("{bad"),
+				[]byte("{bad"),
+			}, nil
+		},
+	}
+
+	chain := NewTransformChain(badOutputTransform)
+	ctx := NewTransformContext("m", "p")
+
+	var buf bytes.Buffer
+	st := NewStreamTranslator("m")
+	st.SetTransformChain(chain, ctx)
+	err := st.TranslateStream(strings.NewReader(input), &buf)
+
+	if err == nil {
+		t.Fatal("expected error from consecutive unparseable transformed chunks")
+	}
+	if !strings.Contains(err.Error(), "consecutive") {
+		t.Errorf("error = %q, want to contain 'consecutive'", err.Error())
+	}
+}

@@ -7,10 +7,27 @@ import (
 	"testing"
 )
 
-func TestLoadConfigAndResolve(t *testing.T) {
+// loadTestConfig writes yaml to a temp file, loads and resolves it.
+func loadTestConfig(t *testing.T, yaml string) (*ProvidersConfig, *ModelResolver) {
+	t.Helper()
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := LoadConfig(cfgPath)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	r, err := NewModelResolver(cfg)
+	if err != nil {
+		t.Fatalf("NewModelResolver: %v", err)
+	}
+	return cfg, r
+}
+
+func TestLoadConfigAndResolve(t *testing.T) {
+	cfg, r := loadTestConfig(t, `
 providers:
   - name: ollama
     endpoint: http://localhost:11434/v1
@@ -22,19 +39,10 @@ providers:
     api_key: tok_123
     models:
       big_coder: deepseek-coder-v2-236b
-`), 0644)
+`)
 
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
 	if len(cfg.Providers) != 2 {
 		t.Fatalf("expected 2 providers, got %d", len(cfg.Providers))
-	}
-
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
 	}
 
 	m, err := r.Resolve("fast_coder")
@@ -69,7 +77,7 @@ providers:
 	}
 
 	// Auto-detect transform from provider name
-	if !reflect.DeepEqual(m.Transform, []string{"schema:generic"}) { // "together" doesn't match any known preset
+	if !reflect.DeepEqual(m.Transform, []string{"schema:generic"}) {
 		t.Errorf("expected [schema:generic] transform for 'together', got %v", m.Transform)
 	}
 	ollamaModel, _ := r.Resolve("fast_coder")
@@ -79,25 +87,15 @@ providers:
 }
 
 func TestExplicitTransform(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: my-google-provider
     endpoint: https://generativelanguage.googleapis.com/v1beta/openai
     transform: ["gemini"]
     models:
       flash: gemini-2.0-flash
-`), 0644)
+`)
 
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
 	m, _ := r.Resolve("flash")
 	if !reflect.DeepEqual(m.Transform, []string{"gemini"}) {
 		t.Errorf("expected [gemini] transform, got %v", m.Transform)
@@ -107,26 +105,14 @@ providers:
 func TestEnvVarExpansion(t *testing.T) {
 	t.Setenv("TEST_API_KEY", "secret_key_value")
 
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: remote
     endpoint: https://api.example.com/v1
     api_key: ${TEST_API_KEY}
     models:
       test_model: gpt-4
-`), 0644)
-
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
+`)
 
 	m, _ := r.Resolve("test_model")
 	if m.APIKey != "secret_key_value" {
@@ -174,25 +160,15 @@ providers:
 }
 
 func TestTransformArray(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: local
     endpoint: http://localhost:11434/v1
     transform: ["reasoning", "enhancetool"]
     models:
       smart: qwen3:32b
-`), 0644)
+`)
 
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
 	m, _ := r.Resolve("smart")
 	want := []string{"reasoning", "enhancetool"}
 	if !reflect.DeepEqual(m.Transform, want) {
@@ -201,9 +177,7 @@ providers:
 }
 
 func TestTransformPerModel(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: local
     endpoint: http://localhost:11434/v1
@@ -213,16 +187,7 @@ providers:
       tool_model:
         model: qwen3:32b
         transform: ["tooluse", "enhancetool"]
-`), 0644)
-
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
+`)
 
 	// default_model should inherit provider-level transform
 	dm, _ := r.Resolve("default_model")
@@ -239,9 +204,7 @@ providers:
 }
 
 func TestTransformAutoDetect(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: ollama
     endpoint: http://localhost:11434/v1
@@ -251,16 +214,7 @@ providers:
     endpoint: http://localhost:8080/v1
     models:
       remote: some-model
-`), 0644)
-
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
+`)
 
 	m, _ := r.Resolve("local")
 	if !reflect.DeepEqual(m.Transform, []string{"schema:ollama"}) {
@@ -274,9 +228,7 @@ providers:
 }
 
 func TestModelConfigMaxTokens(t *testing.T) {
-	dir := t.TempDir()
-	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte(`
+	_, r := loadTestConfig(t, `
 providers:
   - name: local
     endpoint: http://localhost:11434/v1
@@ -286,16 +238,7 @@ providers:
       custom_cap:
         model: qwen3:32b
         max_tokens: 8192
-`), 0644)
-
-	cfg, err := LoadConfig(cfgPath)
-	if err != nil {
-		t.Fatalf("LoadConfig: %v", err)
-	}
-	r, err := NewModelResolver(cfg)
-	if err != nil {
-		t.Fatalf("NewModelResolver: %v", err)
-	}
+`)
 
 	dm, _ := r.Resolve("default_cap")
 	if dm.MaxTokens != 4096 {
