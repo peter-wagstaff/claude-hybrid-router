@@ -36,7 +36,7 @@ func TestRequestBasic(t *testing.T) {
 		t.Errorf("unexpected user message: %+v", req.Messages[1])
 	}
 	if req.MaxTokens != 1024 {
-		t.Errorf("unexpected max_tokens: %d", req.MaxTokens)
+		t.Errorf("unexpected max_completion_tokens: %d", req.MaxTokens)
 	}
 	if req.Temperature == nil || *req.Temperature != 0.7 {
 		t.Errorf("unexpected temperature")

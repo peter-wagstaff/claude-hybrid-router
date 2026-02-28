@@ -1,6 +1,7 @@
 package translate
 
-// deepseekTransform caps max_tokens to 8192 for DeepSeek API compatibility.
+// deepseekTransform renames max_completion_tokens → max_tokens for DeepSeek
+// API compatibility (DeepSeek uses the OpenAI-legacy parameter name).
 type deepseekTransform struct{}
 
 func newDeepseekTransform() *deepseekTransform {
@@ -10,8 +11,9 @@ func newDeepseekTransform() *deepseekTransform {
 func (d *deepseekTransform) Name() string { return "deepseek" }
 
 func (d *deepseekTransform) TransformRequest(req map[string]interface{}, ctx *TransformContext) error {
-	if v, ok := req["max_tokens"].(float64); ok && v > 8192 {
-		req["max_tokens"] = float64(8192)
+	if v, ok := req["max_completion_tokens"]; ok {
+		req["max_tokens"] = v
+		delete(req, "max_completion_tokens")
 	}
 	return nil
 }

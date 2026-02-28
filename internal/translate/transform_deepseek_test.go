@@ -2,28 +2,32 @@ package translate
 
 import "testing"
 
-func TestDeepseekMaxTokensCap(t *testing.T) {
+func TestDeepseekRenamesMaxTokens(t *testing.T) {
 	tr := newDeepseekTransform()
 	ctx := NewTransformContext("model", "deepseek")
 
 	tests := []struct {
-		name     string
-		req      map[string]interface{}
-		wantVal  interface{} // expected max_tokens value, or nil if key should be absent
+		name    string
+		req     map[string]interface{}
+		wantKey string
+		wantVal interface{} // expected value under wantKey, or nil if key should be absent
 	}{
 		{
-			name:    "above cap is capped to 8192",
-			req:     map[string]interface{}{"max_tokens": float64(65536)},
-			wantVal: float64(8192),
+			name:    "renames max_completion_tokens to max_tokens",
+			req:     map[string]interface{}{"max_completion_tokens": float64(65536)},
+			wantKey: "max_tokens",
+			wantVal: float64(65536),
 		},
 		{
-			name:    "below cap is unchanged",
-			req:     map[string]interface{}{"max_tokens": float64(4096)},
+			name:    "small value also renamed",
+			req:     map[string]interface{}{"max_completion_tokens": float64(4096)},
+			wantKey: "max_tokens",
 			wantVal: float64(4096),
 		},
 		{
-			name:    "absent max_tokens is not added",
+			name:    "absent max_completion_tokens is not added",
 			req:     map[string]interface{}{"model": "test"},
+			wantKey: "max_tokens",
 			wantVal: nil,
 		},
 	}
@@ -31,15 +35,20 @@ func TestDeepseekMaxTokensCap(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tr.TransformRequest(tt.req, ctx)
-			val, ok := tt.req["max_tokens"]
+
 			if tt.wantVal == nil {
-				if ok {
-					t.Errorf("should not add max_tokens if not present, got %v", val)
+				if _, ok := tt.req[tt.wantKey]; ok {
+					t.Errorf("should not add %s if max_completion_tokens not present", tt.wantKey)
 				}
-			} else {
-				if !ok || val != tt.wantVal {
-					t.Errorf("expected %v, got %v", tt.wantVal, val)
-				}
+				return
+			}
+
+			val, ok := tt.req[tt.wantKey]
+			if !ok || val != tt.wantVal {
+				t.Errorf("expected %s=%v, got %v", tt.wantKey, tt.wantVal, val)
+			}
+			if _, ok := tt.req["max_completion_tokens"]; ok {
+				t.Error("max_completion_tokens should be removed after rename")
 			}
 		})
 	}

@@ -492,12 +492,16 @@ func TestLocalRouteWithMultipleTransforms(t *testing.T) {
 		t.Fatalf("parse captured request: %v", err)
 	}
 
+	// deepseek transform renames max_completion_tokens → max_tokens
 	maxTokens, ok := oaiReq["max_tokens"].(float64)
 	if !ok {
-		t.Fatal("max_tokens missing from captured request")
+		t.Fatal("max_tokens missing from captured request (deepseek transform should rename)")
 	}
-	if maxTokens != 8192 {
-		t.Errorf("expected max_tokens capped to 8192, got %v", maxTokens)
+	if maxTokens != 16384 {
+		t.Errorf("expected max_tokens=16384 (passthrough, no cap), got %v", maxTokens)
+	}
+	if _, exists := oaiReq["max_completion_tokens"]; exists {
+		t.Error("max_completion_tokens should be removed by deepseek transform")
 	}
 
 	tools := oaiReq["tools"].([]interface{})
