@@ -85,18 +85,6 @@ The proxy intercepts HTTPS CONNECT tunnels, performs MITM TLS, and inspects the 
 
 Logs are written to `~/.claude-hybrid/proxy.log` (auto-truncated daily). Use `--verbose` for detailed logging.
 
-## Configuration
-
-Environment variables (all optional):
-
-| Variable | Default | Purpose |
-|----------|---------|---------|
-| `UPSTREAM_TIMEOUT_SECS` | 30 | Upstream connection timeout |
-| `MAX_BODY_BYTES` | 10485760 | Max request/response body (10 MB) |
-| `MAX_PROXY_GOROUTINES` | 128 | Concurrent connection limit |
-| `CLIENT_RECV_TIMEOUT_SECS` | 300 | Client receive timeout (5 min) |
-| `MITM_CACHE_MAX_SIZE` | 256 | LRU cert cache size |
-
 ## Transforms
 
 Providers can apply transforms to handle API quirks and extract reasoning from models that use non-standard formats. Specify transforms at the provider level (applies to all models) or per-model (overrides provider-level):

@@ -1,8 +1,6 @@
 package translate
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"strconv"
 )
@@ -93,7 +91,7 @@ func (g *groqTransform) TransformStreamChunk(data []byte, ctx *TransformContext)
 	if tc, ok := toolCalls[0].(map[string]interface{}); ok {
 		if id, ok := tc["id"].(string); ok {
 			if _, err := strconv.Atoi(id); err == nil {
-				tc["id"] = "call_" + groqRandomHex(12)
+				tc["id"] = "call_" + randomHex(12)
 				modified = true
 			}
 		}
@@ -115,13 +113,6 @@ func (g *groqTransform) TransformStreamChunk(data []byte, ctx *TransformContext)
 		return [][]byte{data}, nil
 	}
 	return [][]byte{out}, nil
-}
-
-// groqRandomHex generates n random hex bytes (2n hex chars).
-func groqRandomHex(n int) string {
-	b := make([]byte, n)
-	rand.Read(b)
-	return hex.EncodeToString(b)
 }
 
 func init() {

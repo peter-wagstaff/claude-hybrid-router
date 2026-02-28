@@ -48,11 +48,6 @@ func WithModelResolver(r *config.ModelResolver) Option {
 	return func(p *Proxy) { p.modelResolver = r }
 }
 
-// WithLocalClient sets a custom HTTP client for local model requests.
-func WithLocalClient(c *http.Client) Option {
-	return func(p *Proxy) { p.localClient = c }
-}
-
 // New creates a new Proxy.
 func New(cache *mitm.CertCache, opts ...Option) *Proxy {
 	p := &Proxy{

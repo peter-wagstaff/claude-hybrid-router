@@ -155,7 +155,7 @@ func (t *thinkTagTransform) handleSearching(content string, parsed map[string]in
 	}
 
 	// Check for partial tag at end of content
-	if partial := partialOpenTag(content); partial != "" {
+	if partial := partialTag(content, "<think>"); partial != "" {
 		t.tagBuffer = partial
 		rest := content[:len(content)-len(partial)]
 		if rest == "" {
@@ -260,19 +260,6 @@ func (t *thinkTagTransform) handleFinal(content string, parsed map[string]interf
 		return nil, fmt.Errorf("marshal final content: %w", err)
 	}
 	return [][]byte{b}, nil
-}
-
-// partialOpenTag checks if the end of s looks like a partial "<think>" tag.
-// Returns the partial match (e.g., "<", "<t", "<th", etc.) or "".
-func partialOpenTag(s string) string {
-	tag := "<think>"
-	for i := 1; i < len(tag); i++ {
-		suffix := tag[:i]
-		if strings.HasSuffix(s, suffix) {
-			return suffix
-		}
-	}
-	return ""
 }
 
 func init() {

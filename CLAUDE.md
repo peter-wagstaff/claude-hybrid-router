@@ -95,7 +95,7 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 | `cmd/claude-hybrid/main.go` | Launcher: CA cert gen (with lock file for multi-instance safety), config load, proxy start, graceful shutdown, exec claude with env vars |
 | `internal/proxy/proxy.go` | Core proxy: CONNECT handler, MITM TLS, keep-alive tunnel loop, upstream forwarding, local model forwarding |
 | `internal/proxy/route.go` | Route marker detection in system field + Anthropic stub response (JSON and SSE) |
-| `internal/config/config.go` | Configuration: timeouts, limits (all overridable via env vars) |
+| `internal/config/config.go` | Constants: timeouts, body size limits, concurrency cap |
 | `internal/config/providers.go` | YAML config parsing (`~/.claude-hybrid/config.yaml`), model label resolution |
 | `internal/mitm/mitm.go` | Dynamic per-domain cert generation + LRU tls.Certificate cache |
 | `internal/translate/transformer.go` | Transformer interface, TransformChain, TransformContext |
