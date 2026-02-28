@@ -380,7 +380,15 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		log.Printf("[LOCAL_ERR:HTTP_%d] %s returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, sanitized)
 		errBody := translate.FormatError("api_error",
 			fmt.Sprintf("[HTTP_%d] Local provider '%s' returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, sanitized))
-		sendAnthropicError(w, 502, errBody)
+		// Map provider client errors (4xx) to 400 so the caller treats them
+		// as non-retryable.  We can't forward the raw code (e.g. 401) because
+		// the client thinks it's talking to Anthropic and may retry auth
+		// errors.  Server errors (5xx) become 502 to indicate upstream failure.
+		code := 502
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			code = 400
+		}
+		sendAnthropicError(w, code, errBody)
 		return
 	}
 
