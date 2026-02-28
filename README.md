@@ -58,6 +58,8 @@ providers:
 - `api_key` supports `${VAR}` env var expansion, or you can put the key directly
 - `max_tokens` caps the token limit per provider (some models have lower limits than Claude)
 
+See [`config.example.yaml`](config.example.yaml) for ready-to-use templates for common providers (Ollama, DeepSeek, OpenAI, OpenRouter, Groq) with the correct transform chains pre-configured.
+
 Then add the routing marker to a Claude Code agent's system prompt (e.g., `.claude/agents/my-agent.md`):
 
 ```

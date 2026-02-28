@@ -1,0 +1,98 @@
+# claude-hybrid-router provider configuration
+# Copy to ~/.claude-hybrid/config.yaml and uncomment the providers you want.
+#
+# Each provider needs:
+#   - name:      identifier used in logs
+#   - endpoint:  OpenAI-compatible API base URL
+#   - api_key:   API key (supports ${ENV_VAR} expansion, omit for local providers)
+#   - transform: chain of transforms to apply (order matters)
+#   - models:    map of label → model name (labels go in routing markers)
+#
+# Model labels are what you put in the routing marker:
+#   <!-- @proxy-local-route:af83e9 model=LABEL -->
+
+providers:
+
+  # ─── Ollama (local) ──────────────────────────────────────────────────
+  # No API key needed. Works with any model you've pulled.
+  #
+  # - name: ollama
+  #   endpoint: http://localhost:11434/v1
+  #   transform: ["cleancache", "schema:generic"]
+  #   models:
+  #     fast: qwen3:32b
+  #     reasoning:
+  #       model: deepseek-r1:14b
+  #       transform: ["cleancache", "extrathinktag", "enhancetool", "schema:generic"]
+
+  # ─── DeepSeek ────────────────────────────────────────────────────────
+  # deepseek:   renames max_completion_tokens → max_tokens (DeepSeek uses legacy name)
+  # reasoning:  converts reasoning_content → Anthropic thinking blocks
+  # enhancetool: repairs malformed tool call JSON (common with reasoning models)
+  #
+  # - name: deepseek
+  #   endpoint: https://api.deepseek.com/v1
+  #   api_key: ${DEEPSEEK_API_KEY}
+  #   transform: ["cleancache", "deepseek", "reasoning", "enhancetool", "schema:generic"]
+  #   models:
+  #     reasoner: deepseek-reasoner
+  #     chat:
+  #       model: deepseek-chat
+  #       # deepseek-chat doesn't reason natively; use tooluse + forcereasoning if needed
+  #       transform: ["cleancache", "deepseek", "tooluse", "forcereasoning", "enhancetool", "schema:generic"]
+
+  # ─── OpenAI ──────────────────────────────────────────────────────────
+  # Most OpenAI models work with minimal transforms.
+  # schema:openai only strips "strict" (OpenAI supports most schema fields).
+  #
+  # - name: openai
+  #   endpoint: https://api.openai.com/v1
+  #   api_key: ${OPENAI_API_KEY}
+  #   transform: ["cleancache", "schema:openai"]
+  #   models:
+  #     gpt4: gpt-4.1
+  #     mini: gpt-4.1-mini
+
+  # ─── OpenRouter ──────────────────────────────────────────────────────
+  # openrouter: fixes numeric tool IDs, renames reasoning field, corrects finish_reason
+  # Add reasoning/extrathinktag per-model depending on whether the model reasons.
+  #
+  # - name: openrouter
+  #   endpoint: https://openrouter.ai/api/v1
+  #   api_key: ${OPENROUTER_API_KEY}
+  #   transform: ["cleancache", "openrouter", "enhancetool", "schema:generic"]
+  #   models:
+  #     llama: meta-llama/llama-4-maverick
+  #     deepseek:
+  #       model: deepseek/deepseek-r1
+  #       transform: ["cleancache", "openrouter", "reasoning", "enhancetool", "schema:generic"]
+
+  # ─── Groq ────────────────────────────────────────────────────────────
+  # groq: strips $schema from tool params, fixes numeric tool IDs
+  #
+  # - name: groq
+  #   endpoint: https://api.groq.com/openai/v1
+  #   api_key: ${GROQ_API_KEY}
+  #   transform: ["cleancache", "groq", "enhancetool", "schema:generic"]
+  #   models:
+  #     llama: llama-3.3-70b-versatile
+
+  # ─── Custom params example ──────────────────────────────────────────
+  # Use customparams + params to inject arbitrary fields into the request body.
+  # Only new keys are added — existing fields (model, messages, etc.) are never
+  # overwritten. Per-model params override provider-level params.
+  #
+  # - name: custom-example
+  #   endpoint: https://api.example.com/v1
+  #   api_key: ${EXAMPLE_API_KEY}
+  #   transform: ["customparams", "cleancache", "schema:generic"]
+  #   params:
+  #     top_k: 40
+  #     presence_penalty: 0.5
+  #   models:
+  #     default: example-model
+  #     creative:
+  #       model: example-model
+  #       params:
+  #         top_k: 80
+  #         temperature: 0.9
