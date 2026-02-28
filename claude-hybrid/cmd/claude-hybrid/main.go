@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 
+	"github.com/peter-wagstaff/claude-hybrid-router/internal/config"
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/mitm"
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/proxy"
 )
@@ -78,8 +79,26 @@ func main() {
 		log.Fatalf("create cert cache: %v", err)
 	}
 
+	// Load provider config (optional)
+	var opts []proxy.Option
+	cfgPath := filepath.Join(baseDir, "config.yaml")
+	if _, err := os.Stat(cfgPath); err == nil {
+		cfg, err := config.LoadConfig(cfgPath)
+		if err != nil {
+			log.Fatalf("load config: %v", err)
+		}
+		resolver, err := config.NewModelResolver(cfg)
+		if err != nil {
+			log.Fatalf("build model resolver: %v", err)
+		}
+		opts = append(opts, proxy.WithModelResolver(resolver))
+		log.Printf("Loaded provider config from %s", cfgPath)
+	} else {
+		log.Printf("No config at %s — local routes will return stub responses", cfgPath)
+	}
+
 	// Start proxy
-	p := proxy.New(certCache)
+	p := proxy.New(certCache, opts...)
 	ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", *bind, *port))
 	if err != nil {
 		log.Fatalf("listen: %v", err)

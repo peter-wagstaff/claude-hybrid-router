@@ -3,6 +3,7 @@ package proxy
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -15,13 +16,16 @@ import (
 
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/config"
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/mitm"
+	"github.com/peter-wagstaff/claude-hybrid-router/internal/translate"
 )
 
 // Proxy is an HTTP handler that handles CONNECT requests with MITM TLS.
 type Proxy struct {
-	certCache  *mitm.CertCache
-	httpClient *http.Client
-	sem        chan struct{}
+	certCache     *mitm.CertCache
+	httpClient    *http.Client
+	localClient   *http.Client
+	modelResolver *config.ModelResolver
+	sem           chan struct{}
 }
 
 // Option configures a Proxy.
@@ -30,6 +34,16 @@ type Option func(*Proxy)
 // WithHTTPClient sets a custom HTTP client for upstream requests.
 func WithHTTPClient(c *http.Client) Option {
 	return func(p *Proxy) { p.httpClient = c }
+}
+
+// WithModelResolver sets the model resolver for local routing.
+func WithModelResolver(r *config.ModelResolver) Option {
+	return func(p *Proxy) { p.modelResolver = r }
+}
+
+// WithLocalClient sets a custom HTTP client for local model requests.
+func WithLocalClient(c *http.Client) Option {
+	return func(p *Proxy) { p.localClient = c }
 }
 
 // New creates a new Proxy.
@@ -50,6 +64,11 @@ func New(cache *mitm.CertCache, opts ...Option) *Proxy {
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
+			Timeout: config.UpstreamTimeout,
+		}
+	}
+	if p.localClient == nil {
+		p.localClient = &http.Client{
 			Timeout: config.UpstreamTimeout,
 		}
 	}
@@ -149,14 +168,7 @@ func (p *Proxy) handleTunnel(tlsConn net.Conn, host, port string) {
 			}
 			log.Printf("Headers: %v", cleanHeaders)
 
-			isStreaming := false
-			var data map[string]interface{}
-			if json.Unmarshal(strippedBody, &data) == nil {
-				if s, ok := data["stream"].(bool); ok {
-					isStreaming = s
-				}
-			}
-			sendLocalStub(tlsConn, routeModel, isStreaming)
+			p.forwardLocal(tlsConn, routeModel, strippedBody)
 		} else {
 			if !p.forwardUpstream(tlsConn, host, port, req, body) {
 				return
@@ -272,6 +284,116 @@ func writeResponseHeadersWithCL(w io.Writer, resp *http.Response, bodyLen int) {
 	}
 	fmt.Fprintf(w, "Content-Length: %d\r\n", bodyLen)
 	fmt.Fprint(w, "\r\n")
+}
+
+func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
+	if p.modelResolver == nil {
+		// No config — fall back to stub response
+		isStreaming := false
+		var data map[string]interface{}
+		if json.Unmarshal(body, &data) == nil {
+			if s, ok := data["stream"].(bool); ok {
+				isStreaming = s
+			}
+		}
+		sendLocalStub(w, modelLabel, isStreaming)
+		return
+	}
+
+	resolved, err := p.modelResolver.Resolve(modelLabel)
+	if err != nil {
+		log.Printf("model resolution failed: %v", err)
+		errBody := translate.FormatError("invalid_request_error",
+			fmt.Sprintf("Unknown model label %q — check ~/.claude-hybrid/config.yaml", modelLabel))
+		sendAnthropicError(w, 400, errBody)
+		return
+	}
+
+	// Translate request body
+	oaiBody, err := translate.RequestToOpenAI(body, resolved.Model, resolved.MaxTokens)
+	if err != nil {
+		log.Printf("request translation failed: %v", err)
+		errBody := translate.FormatError("api_error", fmt.Sprintf("Request translation failed: %v", err))
+		sendAnthropicError(w, 500, errBody)
+		return
+	}
+
+	// Determine if streaming
+	isStreaming := false
+	var data map[string]interface{}
+	if json.Unmarshal(body, &data) == nil {
+		if s, ok := data["stream"].(bool); ok {
+			isStreaming = s
+		}
+	}
+
+	// Build request to local provider
+	endpoint := resolved.Endpoint + "/chat/completions"
+	localReq, err := http.NewRequest("POST", endpoint, strings.NewReader(string(oaiBody)))
+	if err != nil {
+		log.Printf("failed to create local request: %v", err)
+		errBody := translate.FormatError("api_error", fmt.Sprintf("Failed to create request: %v", err))
+		sendAnthropicError(w, 500, errBody)
+		return
+	}
+	localReq.Header.Set("Content-Type", "application/json")
+	if resolved.APIKey != "" {
+		localReq.Header.Set("Authorization", "Bearer "+resolved.APIKey)
+	}
+
+	resp, err := p.localClient.Do(localReq)
+	if err != nil {
+		log.Printf("local provider error for %s: %v", resolved.Provider, err)
+		errBody := translate.FormatError("api_error",
+			fmt.Sprintf("Local model '%s' unreachable: %v (%s)", modelLabel, err, endpoint))
+		sendAnthropicError(w, 502, errBody)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		log.Printf("local provider returned %d: %s", resp.StatusCode, respBody)
+		errBody := translate.FormatError("api_error",
+			fmt.Sprintf("Local provider returned %d: %s", resp.StatusCode, string(respBody)))
+		sendAnthropicError(w, 502, errBody)
+		return
+	}
+
+	if isStreaming {
+		// Stream: translate OpenAI SSE → Anthropic SSE
+		var sseBuf bytes.Buffer
+		st := translate.NewStreamTranslator(modelLabel)
+		if err := st.TranslateStream(resp.Body, &sseBuf); err != nil {
+			log.Printf("stream translation error: %v", err)
+			return
+		}
+		sseBody := sseBuf.Bytes()
+		fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: %d\r\n\r\n", len(sseBody))
+		w.Write(sseBody)
+	} else {
+		// Non-streaming: translate response
+		respBody, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxBodyBytes+1))
+		if err != nil {
+			log.Printf("local response read error: %v", err)
+			return
+		}
+		aBody, err := translate.ResponseToAnthropic(respBody, modelLabel)
+		if err != nil {
+			log.Printf("response translation failed: %v", err)
+			errBody := translate.FormatError("api_error", fmt.Sprintf("Response translation failed: %v", err))
+			sendAnthropicError(w, 502, errBody)
+			return
+		}
+		fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", len(aBody))
+		w.Write(aBody)
+	}
+}
+
+func sendAnthropicError(w io.Writer, httpStatus int, body []byte) {
+	fmt.Fprintf(w, "HTTP/1.1 %d Error\r\nContent-Type: application/json\r\nContent-Length: %d\r\nConnection: close\r\n\r\n",
+		httpStatus, len(body))
+	w.Write(body)
 }
 
 func sendError(w io.Writer, code int, status string) {
