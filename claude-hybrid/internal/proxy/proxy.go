@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -162,7 +163,8 @@ func (p *Proxy) handleTunnel(tlsConn net.Conn, host, port string) {
 		routeModel, strippedBody := detectLocalRoute(body)
 		if routeModel != "" {
 			streamMode := "non-streaming"
-			if bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`)) {
+			var reqMeta struct{ Stream bool `json:"stream"` }
+			if json.Unmarshal(body, &reqMeta) == nil && reqMeta.Stream {
 				streamMode = "streaming"
 			}
 			log.Printf("LOCAL_ROUTE %s https://%s:%s%s → model=%s (%s)",
@@ -379,9 +381,10 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 
 	if resp.StatusCode != 200 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		log.Printf("[LOCAL_ERR:HTTP_%d] %s returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, respBody)
+		sanitized := sanitizeForLog(string(respBody))
+		log.Printf("[LOCAL_ERR:HTTP_%d] %s returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, sanitized)
 		errBody := translate.FormatError("api_error",
-			fmt.Sprintf("[HTTP_%d] Local provider '%s' returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, string(respBody)))
+			fmt.Sprintf("[HTTP_%d] Local provider '%s' returned %d: %s", resp.StatusCode, modelLabel, resp.StatusCode, sanitized))
 		sendAnthropicError(w, 502, errBody)
 		return
 	}
@@ -476,4 +479,14 @@ func isAPIHost(host string) bool {
 		strings.Contains(host, "openai.com") ||
 		strings.Contains(host, "localhost") ||
 		strings.Contains(host, "127.0.0.1")
+}
+
+var bearerRE = regexp.MustCompile(`(?i)bearer\s+\S+`)
+var apiKeyRE = regexp.MustCompile(`(?i)(sk-|key-)[a-zA-Z0-9]{8,}`)
+
+// sanitizeForLog redacts Bearer tokens and API key patterns from text.
+func sanitizeForLog(s string) string {
+	s = bearerRE.ReplaceAllString(s, "Bearer [REDACTED]")
+	s = apiKeyRE.ReplaceAllString(s, "$1[REDACTED]")
+	return s
 }
