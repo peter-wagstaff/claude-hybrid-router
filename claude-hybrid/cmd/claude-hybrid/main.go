@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/config"
@@ -49,19 +50,21 @@ Proxy flags:
 		os.Exit(1)
 	}
 
-	// Open log file, truncating if from a previous day
+	// Open log file with daily rotation. Use an exclusive lock for
+	// truncation to prevent races between concurrent instances.
 	logPath := filepath.Join(baseDir, "proxy.log")
-	logFlags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
 	if shouldTruncateLog(logPath) {
-		logFlags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+		tryTruncateLog(logPath)
 	}
-	logFile, err := os.OpenFile(logPath, logFlags, 0644)
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open log file: %v\n", err)
 		os.Exit(1)
 	}
 	defer logFile.Close()
+	sessionID := fmt.Sprintf("s%d", os.Getpid())
 	log.SetOutput(logFile)
+	log.SetPrefix(fmt.Sprintf("[%s] ", sessionID))
 
 	// Ensure certs directory exists
 	if err := os.MkdirAll(*certsDir, 0700); err != nil {
@@ -71,20 +74,42 @@ Proxy flags:
 	certPath := filepath.Join(*certsDir, "ca.crt")
 	keyPath := filepath.Join(*certsDir, "ca.key")
 
-	// Generate CA if needed
+	// Generate CA if needed, using a lock file to prevent races between
+	// multiple claude-hybrid instances starting simultaneously.
 	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		log.Println("Generating MITM CA certificate...")
-		certPEM, keyPEM, err := mitm.GenerateCA()
-		if err != nil {
-			log.Fatalf("generate CA: %v", err)
+		lockPath := filepath.Join(*certsDir, "ca.lock")
+		lockFile, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if lockErr != nil {
+			// Another instance is generating — wait for cert to appear
+			log.Println("Waiting for another instance to generate CA certificate...")
+			for i := 0; i < 50; i++ {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := os.Stat(certPath); err == nil {
+					break
+				}
+			}
+			if _, err := os.Stat(certPath); os.IsNotExist(err) {
+				log.Fatalf("timed out waiting for CA certificate generation")
+			}
+		} else {
+			// We won the lock — generate the CA
+			lockFile.Close()
+			defer os.Remove(lockPath)
+
+			log.Println("Generating MITM CA certificate...")
+			certPEM, keyPEM, err := mitm.GenerateCA()
+			if err != nil {
+				log.Fatalf("generate CA: %v", err)
+			}
+			if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+				log.Fatalf("write CA key: %v", err)
+			}
+			// Write cert last — other instances wait for this file
+			if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+				log.Fatalf("write CA cert: %v", err)
+			}
+			log.Printf("CA certificate written to %s", certPath)
 		}
-		if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
-			log.Fatalf("write CA cert: %v", err)
-		}
-		if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-			log.Fatalf("write CA key: %v", err)
-		}
-		log.Printf("CA certificate written to %s", certPath)
 	}
 
 	// Load CA
@@ -174,6 +199,31 @@ func shouldTruncateLog(path string) bool {
 	now := time.Now()
 	modTime := info.ModTime()
 	return modTime.Year() != now.Year() || modTime.YearDay() != now.YearDay()
+}
+
+// tryTruncateLog truncates the log file while holding an exclusive lock,
+// preventing races between concurrent instances.
+func tryTruncateLog(path string) {
+	f, err := os.OpenFile(path, os.O_WRONLY, 0644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	// Try non-blocking exclusive lock — if another instance holds it, skip truncation
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return
+	}
+	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	// Re-check after acquiring lock (another instance may have already truncated)
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	modTime := info.ModTime()
+	if modTime.Year() != now.Year() || modTime.YearDay() != now.YearDay() {
+		f.Truncate(0)
+	}
 }
 
 func defaultCertsDir() string {

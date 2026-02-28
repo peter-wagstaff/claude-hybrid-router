@@ -93,7 +93,7 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 
 | File | Purpose |
 |------|---------|
-| `cmd/claude-hybrid/main.go` | Launcher: CA cert gen, config load, proxy start, exec claude with env vars |
+| `cmd/claude-hybrid/main.go` | Launcher: CA cert gen (with lock file for multi-instance safety), config load, proxy start, graceful shutdown, exec claude with env vars |
 | `internal/proxy/proxy.go` | Core proxy: CONNECT handler, MITM TLS, keep-alive tunnel loop, upstream forwarding, local model forwarding |
 | `internal/proxy/route.go` | Route marker detection in system field + Anthropic stub response (JSON and SSE) |
 | `internal/config/config.go` | Configuration: timeouts, limits (all overridable via env vars) |
@@ -160,9 +160,12 @@ Tests run in-process — no external services needed. Certificates are generated
 - Go 1.24+ required
 - One external dependency: `gopkg.in/yaml.v3` (for config parsing)
 - MITM certs generated in memory via `tls.X509KeyPair`
-- CA certs stored in `~/.claude-hybrid/certs/` (auto-generated on first run)
+- CA certs stored in `~/.claude-hybrid/certs/` (auto-generated on first run, lock file prevents races)
 - Provider config at `~/.claude-hybrid/config.yaml` (optional)
-- Logs written to `~/.claude-hybrid/proxy.log` (auto-truncated daily)
+- Logs written to `~/.claude-hybrid/proxy.log` (daily rotation with flock, session ID prefix `[s<pid>]`)
 - `--verbose` enables detailed logging (including dropped SSE chunks); default is sparse (LOCAL_ROUTE + LOCAL_OK + LOCAL_ERR)
 - Error log prefixes: `[LOCAL_ERR:CONNECTION]`, `[LOCAL_ERR:TIMEOUT]`, `[LOCAL_ERR:HTTP_N]`, `[LOCAL_ERR:TRANSLATE]`, `[LOCAL_ERR:PARSE]`
+- API keys in provider error responses are redacted before logging
+- Multiple instances safe: each gets its own proxy port, shares CA cert (read-only) and log file (append)
+- Graceful shutdown: 5s timeout for in-flight requests when Claude exits
 - Single static binary — no runtime dependencies
