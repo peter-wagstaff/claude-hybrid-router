@@ -1,6 +1,8 @@
-# claude-hybrid
+# claude-hybrid-router
 
-Drop-in replacement command for `claude` that routes marked requests to a local model. Run `claude-hybrid` instead of `claude` — it starts a transparent MITM proxy, launches Claude Code through it, and intercepts requests tagged with a routing marker.
+Use Claude Code with your subscription and Anthropic's models for your main workflow, while delegating specific agents to third-party or local models like DeepSeek, Qwen, GPT-4o, or anything with an OpenAI-compatible API. Reduce costs by offloading routine tasks to cheaper or local models, while keeping Claude where it matters most.
+
+`claude-hybrid` is a drop-in replacement for the `claude` command. It starts a transparent proxy, launches Claude Code through it, and routes requests from agents you've tagged with a routing marker to the model provider of your choice — while everything else goes to Anthropic as normal.
 
 ## Install
 
@@ -104,25 +106,25 @@ providers:
 
 Available transforms:
 
-| Transform | Purpose |
-|-----------|---------|
+| Transform        | Purpose                                                             |
+| ---------------- | ------------------------------------------------------------------- |
 | `schema:generic` | Strip `additionalProperties`, `$schema`, `strict` from tool schemas |
-| `schema:openai` | Strip `strict` only |
-| `schema:gemini` | Strip Gemini-incompatible schema fields |
-| `reasoning` | Convert `reasoning_content` field to Anthropic thinking blocks |
-| `extrathinktag` | Extract `<think>` tags into thinking blocks (Qwen3, DeepSeek-R1) |
-| `forcereasoning` | Inject reasoning prompt and extract `<reasoning_content>` tags |
-| `enhancetool` | Repair malformed tool call JSON |
-| `deepseek` | Cap `max_tokens` to 8192 |
-| `tooluse` | Inject ExitTool for models that avoid tool use |
-| `openrouter` | Fix OpenRouter quirks (tool IDs, cache_control) |
-| `groq` | Fix Groq quirks (cache_control, `$schema`, tool IDs) |
+| `schema:openai`  | Strip `strict` only                                                 |
+| `schema:gemini`  | Strip Gemini-incompatible schema fields                             |
+| `reasoning`      | Convert `reasoning_content` field to Anthropic thinking blocks      |
+| `extrathinktag`  | Extract `<think>` tags into thinking blocks (Qwen3, DeepSeek-R1)    |
+| `forcereasoning` | Inject reasoning prompt and extract `<reasoning_content>` tags      |
+| `enhancetool`    | Repair malformed tool call JSON                                     |
+| `deepseek`       | Cap `max_tokens` to 8192                                            |
+| `tooluse`        | Inject ExitTool for models that avoid tool use                      |
+| `openrouter`     | Fix OpenRouter quirks (tool IDs, cache_control)                     |
+| `groq`           | Fix Groq quirks (cache_control, `$schema`, tool IDs)                |
 
 ## Building from source
 
 ```bash
-git clone https://github.com/peter-wagstaff/claude-hybrid-router/git
-cd claude-hybrid
+git clone https://github.com/peter-wagstaff/claude-hybrid-router.git
+cd claude-hybrid-router
 go build -o claude-hybrid ./cmd/claude-hybrid
 ```
 
