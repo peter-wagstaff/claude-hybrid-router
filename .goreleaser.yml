@@ -1,0 +1,22 @@
+version: 2
+
+builds:
+  - main: ./cmd/claude-hybrid
+    binary: claude-hybrid
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - formats: ["tar.gz"]
+    files:
+      - LICENSE
+      - README.md
+
+changelog:
+  sort: asc

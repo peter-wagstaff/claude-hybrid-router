@@ -13,7 +13,6 @@ Only the `system` field is checked for the marker — never `messages`. This pre
 ## Repository Structure
 
 ```
-claude-hybrid/
 ├── go.mod
 ├── cmd/claude-hybrid/main.go        # Launcher: cert gen, config load, start proxy, exec claude
 ├── internal/
@@ -50,10 +49,10 @@ claude-hybrid/
 
 ```bash
 # Run all tests
-cd claude-hybrid && go test ./... -v
+go test ./... -v
 
 # Build the binary
-cd claude-hybrid && go build -o claude-hybrid ./cmd/claude-hybrid
+go build -o claude-hybrid ./cmd/claude-hybrid
 
 # Run it (starts proxy + claude)
 ./claude-hybrid

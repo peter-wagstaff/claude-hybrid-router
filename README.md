@@ -97,18 +97,51 @@ Environment variables (all optional):
 | `CLIENT_RECV_TIMEOUT_SECS` | 300 | Client receive timeout (5 min) |
 | `MITM_CACHE_MAX_SIZE` | 256 | LRU cert cache size |
 
+## Transforms
+
+Providers can apply transforms to handle API quirks and extract reasoning from models that use non-standard formats. Specify transforms at the provider level (applies to all models) or per-model (overrides provider-level):
+
+```yaml
+providers:
+  - name: deepseek
+    endpoint: https://api.deepseek.com/v1
+    api_key: ${DEEPSEEK_API_KEY}
+    transform: ["deepseek", "reasoning", "enhancetool", "schema:generic"]
+    models:
+      reasoner: deepseek-reasoner
+      chat:
+        model: deepseek-chat
+        transform: ["tooluse", "enhancetool", "schema:generic"]
+```
+
+Available transforms:
+
+| Transform | Purpose |
+|-----------|---------|
+| `schema:generic` | Strip `additionalProperties`, `$schema`, `strict` from tool schemas |
+| `schema:openai` | Strip `strict` only |
+| `schema:gemini` | Strip Gemini-incompatible schema fields |
+| `reasoning` | Convert `reasoning_content` field to Anthropic thinking blocks |
+| `extrathinktag` | Extract `<think>` tags into thinking blocks (Qwen3, DeepSeek-R1) |
+| `forcereasoning` | Inject reasoning prompt and extract `<reasoning_content>` tags |
+| `enhancetool` | Repair malformed tool call JSON |
+| `deepseek` | Cap `max_tokens` to 8192 |
+| `tooluse` | Inject ExitTool for models that avoid tool use |
+| `openrouter` | Fix OpenRouter quirks (tool IDs, cache_control) |
+| `groq` | Fix Groq quirks (cache_control, `$schema`, tool IDs) |
+
 ## Building from source
 
 ```bash
 git clone https://github.com/peter-wagstaff/claude-hybrid-router/git
-cd claude-hybrid/claude-hybrid
+cd claude-hybrid
 go build -o claude-hybrid ./cmd/claude-hybrid
 ```
 
 ## Testing
 
 ```bash
-cd claude-hybrid && go test ./... -v
+go test ./... -v
 ```
 
 ## Requirements

@@ -7,5 +7,6 @@ certs/
 .worktrees/
 
 # Go
-claude-hybrid/claude-hybrid
+/claude-hybrid
+coverage.out
 SPEC.md
