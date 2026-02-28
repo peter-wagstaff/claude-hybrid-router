@@ -26,10 +26,16 @@ type Proxy struct {
 	localClient   *http.Client
 	modelResolver *config.ModelResolver
 	sem           chan struct{}
+	verbose       bool
 }
 
 // Option configures a Proxy.
 type Option func(*Proxy)
+
+// WithVerbose enables verbose logging.
+func WithVerbose(v bool) Option {
+	return func(p *Proxy) { p.verbose = v }
+}
 
 // WithHTTPClient sets a custom HTTP client for upstream requests.
 func WithHTTPClient(c *http.Client) Option {
@@ -105,7 +111,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	conn, _, err := hj.Hijack()
 	if err != nil {
-		log.Printf("hijack error: %v", err)
+		p.logVerbose("hijack error: %v", err)
 		return
 	}
 	defer conn.Close()
@@ -116,12 +122,12 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// MITM TLS handshake
 	tlsCfg, err := p.certCache.GetTLSConfig(host)
 	if err != nil {
-		log.Printf("cert generation failed for %s: %v", host, err)
+		p.logVerbose("cert generation failed for %s: %v", host, err)
 		return
 	}
 	tlsConn := tls.Server(conn, tlsCfg)
 	if err := tlsConn.Handshake(); err != nil {
-		log.Printf("MITM TLS handshake failed for %s: %v", host, err)
+		p.logVerbose("MITM TLS handshake failed for %s: %v", host, err)
 		return
 	}
 	defer tlsConn.Close()
@@ -155,18 +161,12 @@ func (p *Proxy) handleTunnel(tlsConn net.Conn, host, port string) {
 
 		routeModel, strippedBody := detectLocalRoute(body)
 		if routeModel != "" {
-			log.Printf("LOCAL_ROUTE %s https://%s:%s%s → model=%s",
-				req.Method, host, port, req.URL.RequestURI(), routeModel)
-
-			// Log headers without auth
-			cleanHeaders := make(http.Header)
-			for k, v := range req.Header {
-				kl := strings.ToLower(k)
-				if kl != "x-api-key" && kl != "authorization" {
-					cleanHeaders[k] = v
-				}
+			streamMode := "non-streaming"
+			if bytes.Contains(body, []byte(`"stream":true`)) || bytes.Contains(body, []byte(`"stream": true`)) {
+				streamMode = "streaming"
 			}
-			log.Printf("Headers: %v", cleanHeaders)
+			log.Printf("LOCAL_ROUTE %s https://%s:%s%s → model=%s (%s)",
+				req.Method, host, port, req.URL.RequestURI(), routeModel, streamMode)
 
 			p.forwardLocal(tlsConn, routeModel, strippedBody)
 		} else {
@@ -224,7 +224,9 @@ func (p *Proxy) forwardUpstream(tlsConn net.Conn, host, port string, req *http.R
 
 	resp, err := p.httpClient.Do(upReq)
 	if err != nil {
-		log.Printf("upstream error for %s: %v", host, err)
+		if p.verbose || isAPIHost(host) {
+			log.Printf("upstream error for %s: %v", host, err)
+		}
 		sendError(tlsConn, 502, "Bad Gateway")
 		return false
 	}
@@ -237,18 +239,18 @@ func (p *Proxy) forwardUpstream(tlsConn net.Conn, host, port string, req *http.R
 		// Stream directly with known Content-Length
 		writeResponseHeaders(tlsConn, resp)
 		if _, err := io.Copy(tlsConn, resp.Body); err != nil {
-			log.Printf("response streaming error for %s: %v", host, err)
+			p.logVerbose("response streaming error for %s: %v", host, err)
 			return false
 		}
 	} else {
 		// Buffer body and add Content-Length
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxBodyBytes+1))
 		if err != nil {
-			log.Printf("response read error for %s: %v", host, err)
+			p.logVerbose("response read error for %s: %v", host, err)
 			return false
 		}
 		if int64(len(respBody)) > config.MaxBodyBytes {
-			log.Printf("response from %s exceeded size limit", host)
+			p.logVerbose("response from %s exceeded size limit", host)
 			sendError(tlsConn, 502, "Bad Gateway")
 			return false
 		}
@@ -299,6 +301,8 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		sendLocalStub(w, modelLabel, isStreaming)
 		return
 	}
+
+	start := time.Now()
 
 	resolved, err := p.modelResolver.Resolve(modelLabel)
 	if err != nil {
@@ -371,6 +375,8 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		sseBody := sseBuf.Bytes()
 		fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: %d\r\n\r\n", len(sseBody))
 		w.Write(sseBody)
+		log.Printf("LOCAL_OK %s → %s/%s (streaming, %dms)",
+			modelLabel, resolved.Provider, resolved.Model, time.Since(start).Milliseconds())
 	} else {
 		// Non-streaming: translate response
 		respBody, err := io.ReadAll(io.LimitReader(resp.Body, config.MaxBodyBytes+1))
@@ -387,6 +393,17 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		}
 		fmt.Fprintf(w, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: %d\r\n\r\n", len(aBody))
 		w.Write(aBody)
+		// Extract token usage from translated response
+		var aResp struct {
+			Usage struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		json.Unmarshal(aBody, &aResp)
+		log.Printf("LOCAL_OK %s → %s/%s (%dms, in=%d out=%d tokens)",
+			modelLabel, resolved.Provider, resolved.Model, time.Since(start).Milliseconds(),
+			aResp.Usage.InputTokens, aResp.Usage.OutputTokens)
 	}
 }
 
@@ -404,4 +421,18 @@ func sendError(w io.Writer, code int, status string) {
 
 func deadlineFromNow(d time.Duration) time.Time {
 	return time.Now().Add(d)
+}
+
+func (p *Proxy) logVerbose(format string, args ...interface{}) {
+	if p.verbose {
+		log.Printf(format, args...)
+	}
+}
+
+// isAPIHost returns true for hosts where upstream errors are worth logging.
+func isAPIHost(host string) bool {
+	return strings.Contains(host, "anthropic.com") ||
+		strings.Contains(host, "openai.com") ||
+		strings.Contains(host, "localhost") ||
+		strings.Contains(host, "127.0.0.1")
 }

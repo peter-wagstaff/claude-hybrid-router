@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/config"
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/mitm"
@@ -17,10 +18,27 @@ import (
 )
 
 func main() {
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, `Usage: claude-hybrid [proxy-flags] [-- claude-flags]
+
+Starts a local MITM routing proxy and launches Claude Code through it.
+Arguments after -- are passed directly to claude.
+
+Examples:
+  claude-hybrid
+  claude-hybrid --verbose
+  claude-hybrid -- --dangerously-skip-permissions
+  claude-hybrid --verbose -- --dangerously-skip-permissions
+
+Proxy flags:
+`)
+		flag.PrintDefaults()
+	}
 	port := flag.Int("port", 0, "proxy listen port (0 = random)")
 	bind := flag.String("bind", "127.0.0.1", "proxy bind address")
 	certsDir := flag.String("certs-dir", defaultCertsDir(), "directory for CA cert/key")
 	proxyOnly := flag.Bool("proxy-only", false, "run proxy without launching claude")
+	verbose := flag.Bool("verbose", false, "enable verbose logging")
 	flag.Parse()
 
 	// Ensure base directory exists
@@ -30,9 +48,13 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Redirect all logging to a file
+	// Open log file, truncating if from a previous day
 	logPath := filepath.Join(baseDir, "proxy.log")
-	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
+	logFlags := os.O_CREATE | os.O_WRONLY | os.O_APPEND
+	if shouldTruncateLog(logPath) {
+		logFlags = os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	}
+	logFile, err := os.OpenFile(logPath, logFlags, 0644)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "open log file: %v\n", err)
 		os.Exit(1)
@@ -80,7 +102,7 @@ func main() {
 	}
 
 	// Load provider config (optional)
-	var opts []proxy.Option
+	opts := []proxy.Option{proxy.WithVerbose(*verbose)}
 	cfgPath := filepath.Join(baseDir, "config.yaml")
 	if _, err := os.Stat(cfgPath); err == nil {
 		cfg, err := config.LoadConfig(cfgPath)
@@ -134,6 +156,17 @@ func main() {
 		log.Fatalf("claude: %v", err)
 	}
 	srv.Close()
+}
+
+// shouldTruncateLog returns true if the log file was last modified before today.
+func shouldTruncateLog(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false // file doesn't exist, will be created fresh
+	}
+	now := time.Now()
+	modTime := info.ModTime()
+	return modTime.Year() != now.Year() || modTime.YearDay() != now.YearDay()
 }
 
 func defaultCertsDir() string {

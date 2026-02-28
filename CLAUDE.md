@@ -46,11 +46,17 @@ cd claude-hybrid && go build -o claude-hybrid ./cmd/claude-hybrid
 # Run it (starts proxy + claude)
 ./claude-hybrid
 
-# With custom port
-./claude-hybrid --port 9090
+# Pass claude flags after --
+./claude-hybrid -- --dangerously-skip-permissions
+
+# Verbose logging
+./claude-hybrid --verbose
 
 # Proxy-only mode (for testing without claude)
 ./claude-hybrid --proxy-only
+
+# Integration test against real provider (requires proxy running)
+go run ./cmd/integration-test -proxy HOST:PORT [-stream]
 ```
 
 ## Architecture
@@ -90,5 +96,6 @@ Tests run in-process — no external services needed. Certificates are generated
 - MITM certs generated in memory via `tls.X509KeyPair`
 - CA certs stored in `~/.claude-hybrid/certs/` (auto-generated on first run)
 - Provider config at `~/.claude-hybrid/config.yaml` (optional)
-- Logs written to `~/.claude-hybrid/proxy.log`
+- Logs written to `~/.claude-hybrid/proxy.log` (auto-truncated daily)
+- `--verbose` enables detailed logging; default is sparse (LOCAL_ROUTE + LOCAL_OK)
 - Single static binary — no runtime dependencies

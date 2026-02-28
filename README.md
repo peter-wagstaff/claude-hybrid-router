@@ -16,8 +16,14 @@ This puts `claude-hybrid` in your `$GOPATH/bin` (usually `~/go/bin`). Make sure 
 # Just use it like claude
 claude-hybrid
 
-# Pass any claude flags through
-claude-hybrid --model sonnet
+# Pass claude flags after --
+claude-hybrid -- --dangerously-skip-permissions
+
+# Verbose proxy logging
+claude-hybrid --verbose
+
+# Both
+claude-hybrid --verbose -- --dangerously-skip-permissions
 
 # With custom proxy port
 claude-hybrid --port 9090
@@ -77,7 +83,7 @@ The proxy intercepts HTTPS CONNECT tunnels, performs MITM TLS, and inspects the 
 - **Marker found, no config** → returns stub response
 - **No marker** → forwards unmodified to Anthropic via HTTP/2
 
-Logs are written to `~/.claude-hybrid/proxy.log`.
+Logs are written to `~/.claude-hybrid/proxy.log` (auto-truncated daily). Use `--verbose` for detailed logging.
 
 ## Configuration
 
