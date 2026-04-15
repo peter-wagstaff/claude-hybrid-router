@@ -89,6 +89,28 @@ The proxy intercepts HTTPS CONNECT tunnels, performs MITM TLS, and inspects the 
 
 Logs are written to `~/.claude-hybrid/proxy.log` (auto-truncated daily). Use `--verbose` for detailed logging.
 
+## Command bridge
+
+Route sub-agent requests to CLI tools instead of an API endpoint. The proxy returns a `tool_use` response that makes Claude Code run the command via its Bash tool — no API endpoint or translation needed.
+
+```yaml
+providers:
+  - name: opencode-agents
+    command: "opencode run --agent $AGENT --format default --dir ~/projects '$PROMPT'"
+    models:
+      oc_simplify: simplifier
+      oc_researcher: architecture-researcher
+```
+
+Template variables:
+- `$AGENT` — resolved model value (right side of models map, e.g. `simplifier`)
+- `$PROMPT` — extracted user prompt (shell-escaped)
+
+This works with any CLI tool that accepts a prompt. The two-turn protocol:
+1. Proxy returns a `tool_use` response with the expanded command
+2. Claude Code runs the command, sends back the output as `tool_result`
+3. Proxy returns the output as text
+
 ## Transforms
 
 Providers can apply transforms to handle API quirks and extract reasoning from models that use non-standard formats. Specify transforms at the provider level (applies to all models) or per-model (overrides provider-level):
