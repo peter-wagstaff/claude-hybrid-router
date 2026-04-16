@@ -20,6 +20,10 @@ import (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "trust" {
+		os.Exit(runTrust(os.Args[2:]))
+	}
+
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, `Usage: claude-hybrid [proxy-flags] [-- claude-flags]
 
@@ -71,60 +75,18 @@ Proxy flags:
 		log.Fatalf("create certs dir: %v", err)
 	}
 
-	certPath := filepath.Join(*certsDir, "ca.crt")
-	keyPath := filepath.Join(*certsDir, "ca.key")
-
-	// Generate CA if needed, using a lock file to prevent races between
-	// multiple claude-hybrid instances starting simultaneously.
-	if _, err := os.Stat(certPath); os.IsNotExist(err) {
-		lockPath := filepath.Join(*certsDir, "ca.lock")
-		lockFile, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
-		if lockErr != nil {
-			// Another instance is generating — wait for cert to appear
-			log.Println("Waiting for another instance to generate CA certificate...")
-			for i := 0; i < 50; i++ {
-				time.Sleep(100 * time.Millisecond)
-				if _, err := os.Stat(certPath); err == nil {
-					break
-				}
-			}
-			if _, err := os.Stat(certPath); os.IsNotExist(err) {
-				log.Fatalf("timed out waiting for CA certificate generation")
-			}
-		} else {
-			// We won the lock — generate the CA
-			lockFile.Close()
-			defer os.Remove(lockPath)
-
-			log.Println("Generating MITM CA certificate...")
-			certPEM, keyPEM, err := mitm.GenerateCA()
-			if err != nil {
-				log.Fatalf("generate CA: %v", err)
-			}
-			if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
-				log.Fatalf("write CA key: %v", err)
-			}
-			// Write cert last — other instances wait for this file
-			if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
-				log.Fatalf("write CA cert: %v", err)
-			}
-			log.Printf("CA certificate written to %s", certPath)
-		}
+	certPath, _, certPEM, keyPEM, err := ensureCA(*certsDir, log.Printf)
+	if err != nil {
+		log.Fatalf("ensure CA: %v", err)
 	}
 
 	// Load CA
-	certPEM, err := os.ReadFile(certPath)
-	if err != nil {
-		log.Fatalf("read CA cert: %v", err)
-	}
-	keyPEM, err := os.ReadFile(keyPath)
-	if err != nil {
-		log.Fatalf("read CA key: %v", err)
-	}
-
 	certCache, err := mitm.NewCertCache(certPEM, keyPEM)
 	if err != nil {
 		log.Fatalf("create cert cache: %v", err)
+	}
+	if !systemTrustInstalled() {
+		log.Printf("CA is not installed in system trust store; run 'claude-hybrid trust install' for Python/pip compatibility")
 	}
 
 	// Load provider config (optional)
@@ -172,6 +134,11 @@ Proxy flags:
 	cmd.Env = append(os.Environ(),
 		"HTTPS_PROXY=http://"+proxyAddr,
 		"NODE_EXTRA_CA_CERTS="+certPath,
+		"NODE_USE_SYSTEM_CA=1",
+		"SSL_CERT_FILE="+systemCertBundlePath(),
+		"REQUESTS_CA_BUNDLE="+systemCertBundlePath(),
+		"CURL_CA_BUNDLE="+systemCertBundlePath(),
+		"PIP_CERT="+systemCertBundlePath(),
 	)
 
 	shutdown := func() {
@@ -232,4 +199,173 @@ func defaultCertsDir() string {
 		return ".claude-hybrid/certs"
 	}
 	return filepath.Join(home, ".claude-hybrid", "certs")
+}
+
+func ensureCA(certsDir string, logf func(string, ...interface{})) (certPath, keyPath string, certPEM, keyPEM []byte, err error) {
+	certPath = filepath.Join(certsDir, "ca.crt")
+	keyPath = filepath.Join(certsDir, "ca.key")
+
+	if _, statErr := os.Stat(certPath); os.IsNotExist(statErr) {
+		lockPath := filepath.Join(certsDir, "ca.lock")
+		lockFile, lockErr := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+		if lockErr != nil {
+			if logf != nil {
+				logf("Waiting for another instance to generate CA certificate...")
+			}
+			for i := 0; i < 50; i++ {
+				time.Sleep(100 * time.Millisecond)
+				if _, err := os.Stat(certPath); err == nil {
+					break
+				}
+			}
+			if _, err := os.Stat(certPath); os.IsNotExist(err) {
+				return "", "", nil, nil, fmt.Errorf("timed out waiting for CA certificate generation")
+			}
+		} else {
+			lockFile.Close()
+			defer os.Remove(lockPath)
+			if logf != nil {
+				logf("Generating MITM CA certificate...")
+			}
+			certPEM, keyPEM, err = mitm.GenerateCA()
+			if err != nil {
+				return "", "", nil, nil, err
+			}
+			if err := os.WriteFile(keyPath, keyPEM, 0600); err != nil {
+				return "", "", nil, nil, err
+			}
+			if err := os.WriteFile(certPath, certPEM, 0644); err != nil {
+				return "", "", nil, nil, err
+			}
+			if logf != nil {
+				logf("CA certificate written to %s", certPath)
+			}
+		}
+	}
+
+	if certPEM == nil {
+		certPEM, err = os.ReadFile(certPath)
+		if err != nil {
+			return "", "", nil, nil, err
+		}
+	}
+	if keyPEM == nil {
+		keyPEM, err = os.ReadFile(keyPath)
+		if err != nil {
+			return "", "", nil, nil, err
+		}
+	}
+	return certPath, keyPath, certPEM, keyPEM, nil
+}
+
+func runTrust(args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: claude-hybrid trust <install|status>")
+		return 2
+	}
+	certsDir := defaultCertsDir()
+	if err := os.MkdirAll(certsDir, 0700); err != nil {
+		fmt.Fprintf(os.Stderr, "create cert dir: %v\n", err)
+		return 1
+	}
+	certPath, _, _, _, err := ensureCA(certsDir, nil)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "ensure CA: %v\n", err)
+		return 1
+	}
+
+	switch args[0] {
+	case "install":
+		if err := installTrust(certPath); err != nil {
+			fmt.Fprintf(os.Stderr, "install trust: %v\n", err)
+			return 1
+		}
+		fmt.Printf("Installed %s into system trust store.\n", certPath)
+		fmt.Printf("Use SSL_CERT_FILE=%s for tools that ignore system trust.\n", systemCertBundlePath())
+		return 0
+	case "status":
+		installed := systemTrustInstalled()
+		fmt.Printf("CA path: %s\n", certPath)
+		fmt.Printf("System trust: %v\n", installed)
+		if installed {
+			return 0
+		}
+		return 1
+	default:
+		fmt.Fprintf(os.Stderr, "unknown trust subcommand %q\n", args[0])
+		return 2
+	}
+}
+
+func installTrust(certPath string) error {
+	cmds := [][]string{{"trust", "anchor", certPath}, {"update-ca-trust"}}
+	for _, argv := range cmds {
+		if err := runElevated(argv...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runElevated(argv ...string) error {
+	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Stdin = os.Stdin
+	if os.Geteuid() != 0 {
+		argv = append([]string{"sudo"}, argv...)
+		cmd = exec.Command(argv[0], argv[1:]...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		cmd.Stdin = os.Stdin
+	}
+	return cmd.Run()
+}
+
+func systemTrustInstalled() bool {
+	out, err := exec.Command("trust", "list").CombinedOutput()
+	if err != nil {
+		return false
+	}
+	return containsIgnoreCase(string(out), "claude-hybrid MITM CA")
+}
+
+func containsIgnoreCase(s, needle string) bool {
+	if len(needle) == 0 {
+		return true
+	}
+	return len(s) >= len(needle) && containsFold(s, needle)
+}
+
+func containsFold(s, needle string) bool {
+	for i := 0; i+len(needle) <= len(s); i++ {
+		if equalFoldASCII(s[i:i+len(needle)], needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalFoldASCII(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		ca := a[i]
+		cb := b[i]
+		if 'A' <= ca && ca <= 'Z' {
+			ca += 'a' - 'A'
+		}
+		if 'A' <= cb && cb <= 'Z' {
+			cb += 'a' - 'A'
+		}
+		if ca != cb {
+			return false
+		}
+	}
+	return true
+}
+
+func systemCertBundlePath() string {
+	return "/etc/ssl/certs/ca-certificates.crt"
 }

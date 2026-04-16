@@ -15,6 +15,9 @@ This puts `claude-hybrid` in your `$GOPATH/bin` (usually `~/go/bin`). Make sure 
 ## Usage
 
 ```bash
+# Install the local MITM CA into system trust (recommended once)
+claude-hybrid trust install
+
 # Just use it like claude
 claude-hybrid
 
@@ -31,7 +34,7 @@ claude-hybrid --verbose -- --dangerously-skip-permissions
 claude-hybrid --port 9090
 ```
 
-On first run, it auto-generates a MITM CA certificate at `~/.claude-hybrid/certs/`. No manual setup needed.
+On first run, it auto-generates a MITM CA certificate at `~/.claude-hybrid/certs/`. For the most reliable setup across Node, Python, pip, and curl, run `claude-hybrid trust install` once so the CA is added to the system trust store.
 
 ## Routing to local/alternative models
 
@@ -77,7 +80,7 @@ claude-hybrid
   ├─ Generate CA cert (if first run)
   ├─ Start MITM proxy on random port
   ├─ Load ~/.claude-hybrid/config.yaml (if exists)
-  ├─ Launch claude with HTTPS_PROXY + NODE_EXTRA_CA_CERTS
+  ├─ Launch claude with HTTPS_PROXY + NODE_EXTRA_CA_CERTS + system CA env fallbacks
   └─ Exit when claude exits
 ```
 
@@ -88,6 +91,28 @@ The proxy intercepts HTTPS CONNECT tunnels, performs MITM TLS, and inspects the 
 - **No marker** → forwards unmodified to Anthropic via HTTP/2
 
 Logs are written to `~/.claude-hybrid/proxy.log` (auto-truncated daily). Use `--verbose` for detailed logging.
+
+## Command bridge
+
+Route sub-agent requests to CLI tools instead of an API endpoint. The proxy returns a `tool_use` response that makes Claude Code run the command via its Bash tool — no API endpoint or translation needed.
+
+```yaml
+providers:
+  - name: opencode-agents
+    command: "opencode run --agent $AGENT --format default --dir ~/projects '$PROMPT'"
+    models:
+      oc_simplify: simplifier
+      oc_researcher: architecture-researcher
+```
+
+Template variables:
+- `$AGENT` — resolved model value (right side of models map, e.g. `simplifier`)
+- `$PROMPT` — extracted user prompt (shell-escaped)
+
+This works with any CLI tool that accepts a prompt. The two-turn protocol:
+1. Proxy returns a `tool_use` response with the expanded command
+2. Claude Code runs the command, sends back the output as `tool_result`
+3. Proxy returns the output as text
 
 ## Transforms
 

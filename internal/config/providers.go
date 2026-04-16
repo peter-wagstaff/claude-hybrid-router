@@ -27,10 +27,11 @@ func (mc *ModelConfig) UnmarshalYAML(value *yaml.Node) error {
 	return value.Decode((*raw)(mc))
 }
 
-// ProviderConfig represents a single OpenAI-compatible provider.
+// ProviderConfig represents a single OpenAI-compatible provider or a command bridge.
 type ProviderConfig struct {
 	Name      string                  `yaml:"name"`
 	Endpoint  string                  `yaml:"endpoint"`
+	Command   string                  `yaml:"command,omitempty"`     // shell command template ($AGENT, $PROMPT); skips endpoint/translation
 	APIKey    string                  `yaml:"api_key"`
 	MaxTokens int                     `yaml:"max_tokens,omitempty"`  // cap max_tokens for this provider
 	Transform []string                `yaml:"transform,omitempty"`   // transform chain (auto-detected from name if empty)
@@ -47,6 +48,7 @@ type ProvidersConfig struct {
 type ResolvedModel struct {
 	Endpoint  string                 // e.g. "http://localhost:11434/v1"
 	Model     string                 // backend model name, e.g. "qwen3:32b"
+	Command   string                 // shell command template (empty = normal HTTP forwarding)
 	APIKey    string                 // resolved API key (empty if none)
 	Label     string                 // original label, e.g. "fast_coder"
 	Provider  string                 // provider name, e.g. "ollama"
@@ -91,7 +93,7 @@ func NewModelResolver(cfg *ProvidersConfig) (*ModelResolver, error) {
 			return nil, fmt.Errorf("provider missing name")
 		}
 		endpoint := strings.TrimRight(p.Endpoint, "/")
-		if endpoint == "" {
+		if endpoint == "" && p.Command == "" {
 			return nil, fmt.Errorf("provider %q missing endpoint", p.Name)
 		}
 		apiKey := expandEnvVars(p.APIKey)
@@ -119,6 +121,7 @@ func NewModelResolver(cfg *ProvidersConfig) (*ModelResolver, error) {
 			models[label] = ResolvedModel{
 				Endpoint:  endpoint,
 				Model:     mc.Model,
+				Command:   p.Command,
 				APIKey:    apiKey,
 				Label:     label,
 				Provider:  p.Name,
