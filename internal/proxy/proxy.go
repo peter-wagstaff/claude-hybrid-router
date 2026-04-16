@@ -60,13 +60,17 @@ func New(cache *mitm.CertCache, opts ...Option) *Proxy {
 	if p.httpClient == nil {
 		p.httpClient = &http.Client{
 			Transport: &http.Transport{
-				ForceAttemptHTTP2: true,
-				TLSClientConfig:  &tls.Config{},
+				ForceAttemptHTTP2:     true,
+				TLSClientConfig:      &tls.Config{},
+				ResponseHeaderTimeout: config.UpstreamTimeout,
 			},
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
 			},
-			Timeout: config.UpstreamTimeout,
+			// No http.Client.Timeout — it covers the entire response including
+			// body reads, which kills long-running streaming responses from
+			// Anthropic's API. ResponseHeaderTimeout on the Transport handles
+			// the "server not responding" case without cutting off streams.
 		}
 	}
 	if p.localClient == nil {
