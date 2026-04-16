@@ -15,6 +15,9 @@ This puts `claude-hybrid` in your `$GOPATH/bin` (usually `~/go/bin`). Make sure 
 ## Usage
 
 ```bash
+# Install the local MITM CA into system trust (recommended once)
+claude-hybrid trust install
+
 # Just use it like claude
 claude-hybrid
 
@@ -31,7 +34,7 @@ claude-hybrid --verbose -- --dangerously-skip-permissions
 claude-hybrid --port 9090
 ```
 
-On first run, it auto-generates a MITM CA certificate at `~/.claude-hybrid/certs/`. No manual setup needed.
+On first run, it auto-generates a MITM CA certificate at `~/.claude-hybrid/certs/`. For the most reliable setup across Node, Python, pip, and curl, run `claude-hybrid trust install` once so the CA is added to the system trust store.
 
 ## Routing to local/alternative models
 
@@ -77,7 +80,7 @@ claude-hybrid
   ├─ Generate CA cert (if first run)
   ├─ Start MITM proxy on random port
   ├─ Load ~/.claude-hybrid/config.yaml (if exists)
-  ├─ Launch claude with HTTPS_PROXY + NODE_EXTRA_CA_CERTS
+  ├─ Launch claude with HTTPS_PROXY + NODE_EXTRA_CA_CERTS + system CA env fallbacks
   └─ Exit when claude exits
 ```
 
