@@ -10,5 +10,5 @@ const (
 	MaxProxyGoroutines = 128
 
 	MitmCacheMaxSize      = 256
-	MitmCertValidityHours = 1.0
+	MitmCertValidityHours = 72.0
 )

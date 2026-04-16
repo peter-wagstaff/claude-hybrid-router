@@ -135,7 +135,7 @@ func (c *CertCache) generateCert(hostname string) (tls.Certificate, error) {
 	tmpl := &x509.Certificate{
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: hostname},
-		NotBefore:    time.Now(),
+		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(c.validity),
 	}
 
@@ -175,8 +175,8 @@ func GenerateCA() (certPEM, keyPEM []byte, err error) {
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "claude-hybrid MITM CA"},
-		NotBefore:             time.Now(),
-		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,

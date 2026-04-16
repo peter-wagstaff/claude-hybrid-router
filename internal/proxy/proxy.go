@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/peter-wagstaff/claude-hybrid-router/internal/config"
@@ -61,7 +62,7 @@ func New(cache *mitm.CertCache, opts ...Option) *Proxy {
 		p.httpClient = &http.Client{
 			Transport: &http.Transport{
 				ForceAttemptHTTP2: true,
-				TLSClientConfig:  &tls.Config{},
+				TLSClientConfig:   &tls.Config{},
 			},
 			CheckRedirect: func(*http.Request, []*http.Request) error {
 				return http.ErrUseLastResponse
@@ -112,6 +113,13 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.Close()
 
+	if shouldBypassMITM(host) {
+		if err := p.tunnelDirect(conn, net.JoinHostPort(host, port)); err != nil {
+			p.logVerbose("direct tunnel failed for %s: %v", host, err)
+		}
+		return
+	}
+
 	// Send 200 Connection Established
 	conn.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n"))
 
@@ -129,6 +137,45 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer tlsConn.Close()
 
 	p.handleTunnel(tlsConn, host, port)
+}
+
+// shouldBypassMITM returns true for hosts where MITM reliably fails because
+// the client embeds its own trust bundle or pins certificates. For those
+// hosts we pass the CONNECT tunnel straight through without interception.
+func shouldBypassMITM(host string) bool {
+	host = strings.ToLower(host)
+	return host == "pypi.org" ||
+		host == "files.pythonhosted.org" ||
+		strings.HasSuffix(host, ".pythonhosted.org")
+}
+
+// tunnelDirect pipes bytes between client and upstream without MITM.
+func (p *Proxy) tunnelDirect(client net.Conn, target string) error {
+	upstream, err := net.DialTimeout("tcp", target, config.UpstreamTimeout)
+	if err != nil {
+		sendError(client, 502, "Bad Gateway")
+		return err
+	}
+	defer upstream.Close()
+
+	if _, err := client.Write([]byte("HTTP/1.1 200 Connection Established\r\n\r\n")); err != nil {
+		return err
+	}
+
+	var wg sync.WaitGroup
+	copyConn := func(dst, src net.Conn) {
+		defer wg.Done()
+		io.Copy(dst, src)
+		if tcp, ok := dst.(*net.TCPConn); ok {
+			tcp.CloseWrite()
+		}
+	}
+
+	wg.Add(2)
+	go copyConn(upstream, client)
+	go copyConn(client, upstream)
+	wg.Wait()
+	return nil
 }
 
 func (p *Proxy) handleTunnel(tlsConn net.Conn, host, port string) {
@@ -158,7 +205,9 @@ func (p *Proxy) handleTunnel(tlsConn net.Conn, host, port string) {
 		routeModel, strippedBody := detectLocalRoute(body)
 		if routeModel != "" {
 			streamMode := "non-streaming"
-			var reqMeta struct{ Stream bool `json:"stream"` }
+			var reqMeta struct {
+				Stream bool `json:"stream"`
+			}
 			if json.Unmarshal(body, &reqMeta) == nil && reqMeta.Stream {
 				streamMode = "streaming"
 			}
