@@ -250,3 +250,44 @@ providers:
 		t.Errorf("expected per-model 8192, got %d", cm.MaxTokens)
 	}
 }
+
+func TestCommandProviderNoEndpoint(t *testing.T) {
+	_, r := loadTestConfig(t, `
+providers:
+  - name: my-agents
+    command: "myctl run --agent $AGENT '$PROMPT'"
+    models:
+      fast: simplifier
+`)
+
+	m, err := r.Resolve("fast")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if m.Command != "myctl run --agent $AGENT '$PROMPT'" {
+		t.Errorf("unexpected command: %s", m.Command)
+	}
+	if m.Model != "simplifier" {
+		t.Errorf("unexpected model: %s", m.Model)
+	}
+	if m.Endpoint != "" {
+		t.Errorf("expected empty endpoint, got %q", m.Endpoint)
+	}
+}
+
+func TestCommandProviderStillRequiresEndpointWithoutCommand(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte(`
+providers:
+  - name: bad
+    models:
+      x: y
+`), 0644)
+
+	cfg, _ := LoadConfig(cfgPath)
+	_, err := NewModelResolver(cfg)
+	if err == nil {
+		t.Error("expected error for provider with neither endpoint nor command")
+	}
+}
