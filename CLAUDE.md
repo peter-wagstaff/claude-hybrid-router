@@ -22,7 +22,8 @@ Only the `system` field is checked for the marker — never `messages`. This pre
 │   ├── mitm/mitm.go                 # CA generation, per-domain cert gen, LRU cache
 │   ├── proxy/
 │   │   ├── proxy.go                 # CONNECT handler, MITM TLS, tunnel loop, upstream/local forwarding
-│   │   └── route.go                 # Route marker detection + stub response generation
+│   │   ├── route.go                 # Route marker detection + stub response generation
+│   │   └── command.go               # Command bridge: route to CLI tools via Bash tool_use
 │   ├── testutil/
 │   │   ├── certs.go                 # Test cert generation helpers
 │   │   ├── echo.go                  # Mock HTTPS echo server
@@ -86,6 +87,9 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
                               │   ├─ Forward to local provider
                               │   ├─ Run response/stream transforms (reasoning, tool repair, etc.)
                               │   └─ Translate OpenAI → Anthropic (ResponseToAnthropic / StreamTranslator)
+                              ├─ If marker found + command bridge:
+                              │   ├─ Extract user prompt, expand $AGENT/$PROMPT in template
+                              │   └─ Return tool_use (Bash) → Claude runs command → proxy returns output
                               ├─ If marker found, no config → return stub response
                               └─ If no marker → HTTP/2 to upstream via net/http, relay as HTTP/1.1
 ```
@@ -97,6 +101,7 @@ Claude Code  --CONNECT-->  Proxy (localhost:random)
 | `cmd/claude-hybrid/main.go` | Launcher: CA cert gen (with lock file for multi-instance safety), config load, proxy start, graceful shutdown, exec claude with env vars |
 | `internal/proxy/proxy.go` | Core proxy: CONNECT handler, MITM TLS, keep-alive tunnel loop, upstream forwarding, local model forwarding |
 | `internal/proxy/route.go` | Route marker detection in system field + Anthropic stub response (JSON and SSE) |
+| `internal/proxy/command.go` | Command bridge: routes to CLI tools via Bash tool_use (two-turn protocol) |
 | `internal/config/config.go` | Constants: timeouts, body size limits, concurrency cap |
 | `internal/config/providers.go` | YAML config parsing (`~/.claude-hybrid/config.yaml`), model label resolution |
 | `internal/mitm/mitm.go` | Dynamic per-domain cert generation + LRU tls.Certificate cache |
@@ -154,6 +159,20 @@ providers:
         params:              # overrides provider-level params for this model
           top_k: 20
 ```
+
+## Command Bridge
+
+Providers with a `command` field skip the endpoint requirement and OpenAI translation. Instead, the proxy returns a `tool_use` response that makes Claude Code run the shell command via Bash. Template variables: `$AGENT` (resolved model value), `$PROMPT` (user prompt, shell-escaped).
+
+```yaml
+providers:
+  - name: opencode-agents
+    command: "opencode run --agent $AGENT --format default --dir ~/projects '$PROMPT'"
+    models:
+      oc_simplify: simplifier
+```
+
+Two-turn protocol: Turn 1 returns tool_use (Bash command), Turn 2 receives tool_result and returns as text.
 
 ## Available Transforms
 

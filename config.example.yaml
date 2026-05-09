@@ -77,6 +77,26 @@ providers:
   #   models:
   #     llama: llama-3.3-70b-versatile
 
+  # ─── Command bridge ─────────────────────────────────────────────────
+  # Route to CLI tools instead of an API endpoint. The proxy returns a
+  # tool_use response that makes Claude Code run the command via Bash.
+  #
+  # Template variables:
+  #   $AGENT  → resolved model value (right side of models map)
+  #   $PROMPT → extracted user prompt (shell-escaped)
+  #
+  # - name: opencode-agents
+  #   command: "opencode run --agent $AGENT --format default --dir ~/projects '$PROMPT'"
+  #   models:
+  #     oc_simplify: simplifier
+  #     oc_researcher: architecture-researcher
+  #
+  # Works with any CLI tool:
+  # - name: codex
+  #   command: "codex -q '$PROMPT'"
+  #   models:
+  #     codex_default: default
+
   # ─── Custom params example ──────────────────────────────────────────
   # Use customparams + params to inject arbitrary fields into the request body.
   # Only new keys are added — existing fields (model, messages, etc.) are never

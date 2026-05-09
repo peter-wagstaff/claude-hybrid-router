@@ -310,6 +310,19 @@ func (p *Proxy) forwardLocal(w io.Writer, modelLabel string, body []byte) {
 		return
 	}
 
+	// Command bridge: skip all translation, return tool_use for Bash
+	if resolved.Command != "" {
+		isStreaming := false
+		var data map[string]interface{}
+		if json.Unmarshal(body, &data) == nil {
+			if s, ok := data["stream"].(bool); ok {
+				isStreaming = s
+			}
+		}
+		p.forwardCommand(w, resolved.Command, resolved.Model, modelLabel, body, isStreaming)
+		return
+	}
+
 	// Build transform chain
 	chain, err := translate.BuildChain(resolved.Transform)
 	if err != nil {
